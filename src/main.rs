@@ -1,5 +1,3 @@
-#![feature(type_alias_impl_trait)]
-
 extern crate mysql_async as my;
 
 use clap::value_t_or_exit;
@@ -12,9 +10,9 @@ use std::time;
 use tower_service::Service;
 use trawler::{LobstersRequest, TrawlerRequest};
 
-const ORIGINAL_SCHEMA: &'static str = include_str!("db-schema/original.sql");
-const NORIA_SCHEMA: &'static str = include_str!("db-schema/noria.sql");
-const NATURAL_SCHEMA: &'static str = include_str!("db-schema/natural.sql");
+const ORIGINAL_SCHEMA: &str = include_str!("db-schema/original.sql");
+const NORIA_SCHEMA: &str = include_str!("db-schema/noria.sql");
+const NATURAL_SCHEMA: &str = include_str!("db-schema/natural.sql");
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 enum Variant {
@@ -248,7 +246,7 @@ impl Service<TrawlerRequest> for MysqlTrawler {
                     }
                 }
             }};
-        };
+        }
 
         let variant = self.variant;
         Box::pin(async move {
