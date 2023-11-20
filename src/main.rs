@@ -1,3 +1,5 @@
+#![feature(type_alias_impl_trait, impl_trait_in_assoc_type)]
+
 extern crate mysql_async as my;
 
 use clap::value_t_or_exit;
