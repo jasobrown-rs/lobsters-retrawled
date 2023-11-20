@@ -1,4 +1,4 @@
-use my;
+
 use my::prelude::*;
 use std::collections::HashSet;
 use std::future::Future;
@@ -14,14 +14,12 @@ where
 {
     let c = c.await?;
     let comments = c
-        .query(&format!(
-            "SELECT  `comments`.* \
+        .query("SELECT  `comments`.* \
              FROM `comments` \
              WHERE `comments`.`is_deleted` = 0 \
              AND `comments`.`is_moderated` = 0 \
              ORDER BY id DESC \
-             LIMIT 40 OFFSET 0",
-        ))
+             LIMIT 40 OFFSET 0")
         .await?;
 
     let (mut c, (comments, users, stories)) = comments

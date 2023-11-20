@@ -1,4 +1,4 @@
-use my;
+
 use my::prelude::*;
 use std::future::Future;
 use trawler::{StoryId, UserId, Vote};

@@ -91,7 +91,7 @@ impl Service<bool> for MysqlTrawlerBuilder {
                         continue;
                     }
                     if !current_q.is_empty() {
-                        current_q.push_str(" ");
+                        current_q.push(' ');
                     }
                     current_q.push_str(line);
                     if current_q.ends_with(';') {
@@ -289,7 +289,7 @@ impl trawler::AsyncShutdown for MysqlTrawler {
     fn shutdown(mut self) -> Self::Future {
         let _ = std::mem::replace(&mut self.next_conn, MaybeConn::None);
         async move {
-            let _ = self.c.disconnect().await.unwrap();
+            self.c.disconnect().await.unwrap();
         }
     }
 }
@@ -377,7 +377,7 @@ fn main() {
     ));
     let s = MysqlTrawlerBuilder {
         variant,
-        opts: opts.into(),
+        opts,
     };
 
     wl.run(s, args.is_present("prime"));
