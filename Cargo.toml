@@ -6,11 +6,9 @@ publish = false
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
-clap = "2.25.0"
+clap = { version = "4.4", features =["derive"] }
 futures-core = "0.3.0"
 futures-util = "0.3.0"
 mysql_async = "0.23.0" ## update me to >= 0.33
-tokio = { version = "1", features = ["full"] }
-tokio-test = "0.4"
 tower-service = "0.3"
 trawler = "0.11.0-alpha.7"

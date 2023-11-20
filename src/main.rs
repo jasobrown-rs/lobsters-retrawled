@@ -2,8 +2,8 @@
 
 extern crate mysql_async as my;
 
-use clap::value_t_or_exit;
-use clap::{App, Arg};
+
+use clap::{Parser, ValueEnum};
 use my::prelude::*;
 use std::future::Future;
 use std::pin::Pin;
@@ -16,7 +16,7 @@ const ORIGINAL_SCHEMA: &str = include_str!("db-schema/original.sql");
 const NORIA_SCHEMA: &str = include_str!("db-schema/noria.sql");
 const NATURAL_SCHEMA: &str = include_str!("db-schema/natural.sql");
 
-#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug, ValueEnum)]
 enum Variant {
     Original,
     Noria,
@@ -294,91 +294,60 @@ impl trawler::AsyncShutdown for MysqlTrawler {
     }
 }
 
+#[derive(Debug, Parser)]
+struct Options {
+    /// Reuest load scale factor for workload
+    #[arg(long, default_value = "1.0")]
+    scale: f64,
+
+    /// Number of allowed concurrent requests
+    #[arg(long,  default_value = "50")]
+    in_flight: usize,
+
+    /// Set if the backend must be primed with initial stories and comments.
+    #[arg(long, default_value = "false")]
+    prime: bool,
+
+    /// Which set of queries to run
+    #[arg(long, required = true)]
+    queries: Variant,
+
+    /// Benchmark runtime in seconds
+    #[arg(short = 'r', long, default_value = "30")]
+    runtime: u64,
+
+    /// Use file-based serialized HdrHistograms. There are multiple histograms,
+    /// two for each lobsters request.
+    #[arg(long)]
+    histogram: Option<String>,
+
+    /// Database name (address)
+    #[arg(long, default_value = "mysql://lobsters@localhost/soup")]
+    dbn: String,
+}
+
 fn main() {
-    let args = App::new("lobsters-mysql")
-        .version("0.1")
-        .about("Benchmark a lobste.rs Rails installation using MySQL directly")
-        .arg(
-            Arg::with_name("scale")
-                .long("scale")
-                .takes_value(true)
-                .default_value("1.0")
-                .help("Reuest load scale factor for workload"),
-        )
-        .arg(
-            Arg::with_name("in-flight")
-                .long("in-flight")
-                .takes_value(true)
-                .default_value("50")
-                .help("Number of allowed concurrent requests"),
-        )
-        .arg(
-            Arg::with_name("prime")
-                .long("prime")
-                .help("Set if the backend must be primed with initial stories and comments."),
-        )
-        .arg(
-            Arg::with_name("queries")
-                .short("q")
-                .long("queries")
-                .possible_values(&["original", "noria", "natural"])
-                .takes_value(true)
-                .required(true)
-                .help("Which set of queries to run"),
-        )
-        .arg(
-            Arg::with_name("runtime")
-                .short("r")
-                .long("runtime")
-                .takes_value(true)
-                .default_value("30")
-                .help("Benchmark runtime in seconds"),
-        )
-        .arg(
-            Arg::with_name("histogram")
-                .long("histogram")
-                .help("Use file-based serialized HdrHistograms")
-                .takes_value(true)
-                .long_help("There are multiple histograms, two for each lobsters request."),
-        )
-        .arg(
-            Arg::with_name("dbn")
-                .value_name("DBN")
-                .takes_value(true)
-                .default_value("mysql://lobsters@localhost/soup")
-                .index(1),
-        )
-        .get_matches();
-
-    let variant = match args.value_of("queries").unwrap() {
-        "original" => Variant::Original,
-        "noria" => Variant::Noria,
-        "natural" => Variant::Natural,
-        _ => unreachable!(),
-    };
-    let in_flight = value_t_or_exit!(args, "in-flight", usize);
-
+    let options = Options::parse();
+    
     let mut wl = trawler::WorkloadBuilder::default();
-    wl.scale(value_t_or_exit!(args, "scale", f64))
-        .time(time::Duration::from_secs(value_t_or_exit!(
-            args, "runtime", u64
-        )))
-        .in_flight(in_flight);
+    wl.scale(options.scale)
+        .time(time::Duration::from_secs(options.runtime))
+        .in_flight(options.in_flight);
 
-    if let Some(h) = args.value_of("histogram") {
-        wl.with_histogram(h);
+    if let Some(ref h) = options.histogram {
+        wl.with_histogram(h.as_str());
     }
 
     // check that we can indeed connect
-    let mut opts = my::OptsBuilder::from_opts(args.value_of("dbn").unwrap());
+    let mut opts = my::OptsBuilder::from_opts(options.dbn);
     opts.tcp_nodelay(true);
     opts.pool_options(my::PoolOptions::with_constraints(
-        my::PoolConstraints::new(in_flight, in_flight).unwrap(),
+        my::PoolConstraints::new(options.in_flight, options.in_flight).unwrap(),
     ));
     let s = MysqlTrawlerBuilder {
-        variant,
         opts,
+        variant: options.queries,
     };
 
-    wl.run(s, args.is_present("prime"));
+    wl.run(s, options.prime);
 }
