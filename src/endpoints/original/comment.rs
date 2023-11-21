@@ -14,7 +14,7 @@ pub(crate) async fn handle<F>(
 where
     F: 'static + Future<Output = Result<Conn, Error>> + Send,
 {
-    let c = c.await?;
+    let mut c = c.await?;
     let user = acting_as.unwrap();
     let story = c
         .exec_first::<Row, _, _>(
@@ -84,27 +84,57 @@ where
     // but let's be nice to it
     let now = chrono::Local::now().naive_local();
     let q = if let Some((parent, thread)) = parent {
-        c.prep(
-            "INSERT INTO `comments` \
+        let stmt = c
+            .prep(
+                "INSERT INTO `comments` \
              (`created_at`, `updated_at`, `short_id`, `story_id`, \
              `user_id`, `parent_comment_id`, `thread_id`, \
              `comment`, `upvotes`, `confidence`, \
              `markeddown_comment`) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .await?;
+        c.exec_iter(
+            stmt,
+            (
+                now,
+                now,
+                ::std::str::from_utf8(&id[..]).unwrap(),
+                story,
+                user,
+                parent,
+                thread,
+                "moar benchmarking", // lorem ipsum?
+                "<p>moar benchmarking</p>\n",
+            ),
         )
         .await?
     } else {
-        c.prep(
-            "INSERT INTO `comments` \
+        let stmt = c
+            .prep(
+                "INSERT INTO `comments` \
              (`created_at`, `updated_at`, `short_id`, `story_id`, \
              `user_id`, `comment`, `upvotes`, `confidence`, \
              `markeddown_comment`) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .await?;
+        c.exec_iter(
+            stmt,
+            (
+                now,
+                now,
+                ::std::str::from_utf8(&id[..]).unwrap(),
+                story,
+                user,
+                "moar benchmarking", // lorem ipsum?
+                "<p>moar benchmarking</p>\n",
+            ),
         )
         .await?
     };
     let comment = q.last_insert_id().unwrap();
-    let mut c = q.drop_result().await?;
+    q.drop_result().await?;
 
     if !priming {
         // but why?!
@@ -135,7 +165,7 @@ where
     .await?;
 
     // why are these ordered?
-    let count = c
+    let stmt = c
         .prep(
             "SELECT `comments`.* \
              FROM `comments` \
@@ -144,14 +174,17 @@ where
              (upvotes - downvotes) < 0 ASC, \
              confidence DESC",
         )
+        .await?;
+    let count = c
+        .exec_iter(stmt, (story,))
         .await?
-        .reduce_and_drop(0, |rows, _| rows + 1)
+        .reduce_and_drop(0, |rows, _: Row| rows + 1)
         .await?;
 
     c.exec_drop(
         "UPDATE `stories` \
-                                             SET `comments_count` = ?
-                                             WHERE `stories`.`id` = ?",
+         SET `comments_count` = ?
+         WHERE `stories`.`id` = ?",
         (count, story),
     )
     .await?;

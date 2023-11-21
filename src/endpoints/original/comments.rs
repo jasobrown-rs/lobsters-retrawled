@@ -1,5 +1,5 @@
 use mysql_async::prelude::*;
-use mysql_async::{Conn, Error};
+use mysql_async::{Conn, Error, Row};
 use std::collections::HashSet;
 use std::future::Future;
 use std::iter;
@@ -9,8 +9,8 @@ pub(crate) async fn handle<F>(c: F, acting_as: Option<UserId>) -> Result<(Conn, 
 where
     F: 'static + Future<Output = Result<Conn, Error>> + Send,
 {
-    let c = c.await?;
-    let comments = c
+    let mut c = c.await?;
+    let stmt = c
         .query(
             "SELECT  `comments`.* \
              FROM `comments` \
@@ -21,10 +21,12 @@ where
         )
         .await?;
 
-    let (mut c, (comments, users, stories)) = comments
+    let (comments, users, stories) = c
+        .query_iter(stmt)
+        .await?
         .reduce_and_drop(
             (Vec::new(), HashSet::new(), HashSet::new()),
-            |(mut comments, mut users, mut stories), comment| {
+            |(mut comments, mut users, mut stories), comment: Row| {
                 comments.push(comment.get::<u32, _>("id").unwrap());
                 users.insert(comment.get::<u32, _>("user_id").unwrap());
                 stories.insert(comment.get::<u32, _>("story_id").unwrap());
@@ -38,17 +40,16 @@ where
         let args: Vec<_> = iter::once(&uid as &_)
             .chain(stories.iter().map(|c| c as &_))
             .collect();
-        c = c
-            .exec_drop(
-                &format!(
-                    "SELECT 1 FROM hidden_stories \
+        c.exec_drop(
+            &format!(
+                "SELECT 1 FROM hidden_stories \
                      WHERE user_id = ? \
                      AND hidden_stories.story_id IN ({})",
-                    params
-                ),
-                args,
-            )
-            .await?;
+                params
+            ),
+            args,
+        )
+        .await?;
     }
 
     let users = users
@@ -56,13 +57,12 @@ where
         .map(|id| format!("{}", id))
         .collect::<Vec<_>>()
         .join(",");
-    c = c
-        .drop_query(&format!(
-            "SELECT `users`.* FROM `users` \
+    c.query_drop(&format!(
+        "SELECT `users`.* FROM `users` \
              WHERE `users`.`id` IN ({})",
-            users
-        ))
-        .await?;
+        users
+    ))
+    .await?;
 
     let stories = stories
         .into_iter()
@@ -70,7 +70,7 @@ where
         .collect::<Vec<_>>()
         .join(",");
 
-    let stories = c
+    let stmt = c
         .query(&format!(
             "SELECT  `stories`.* FROM `stories` \
              WHERE `stories`.`id` IN ({})",
@@ -78,8 +78,10 @@ where
         ))
         .await?;
 
-    let (mut c, authors) = stories
-        .reduce_and_drop(HashSet::new(), |mut authors, story| {
+    let authors = c
+        .query_iter(stmt)
+        .await?
+        .reduce_and_drop(HashSet::new(), |mut authors, story: Row| {
             authors.insert(story.get::<u32, _>("user_id").unwrap());
             authors
         })

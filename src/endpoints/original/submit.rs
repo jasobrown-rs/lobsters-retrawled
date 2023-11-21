@@ -13,7 +13,7 @@ pub(crate) async fn handle<F>(
 where
     F: 'static + Future<Output = Result<Conn, Error>> + Send,
 {
-    let c = c.await?;
+    let mut c = c.await?;
     let user = acting_as.unwrap();
 
     // check that tags are active
@@ -55,13 +55,18 @@ where
 
     // NOTE: MySQL technically does everything inside this and_then in a transaction,
     // but let's be nice to it
-    let q = c
+    let stmt = c
         .prep(
             "INSERT INTO `stories` \
              (`created_at`, `user_id`, `title`, \
              `description`, `short_id`, `upvotes`, `hotness`, \
              `markeddown_description`) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .await?;
+    let q = c
+        .exec_iter(
+            stmt,
             (
                 chrono::Local::now().naive_local(),
                 user,
@@ -75,7 +80,7 @@ where
         )
         .await?;
     let story = q.last_insert_id().unwrap();
-    let mut c = q.drop_result().await?;
+    q.drop_result().await?;
 
     c.exec_drop(
         "INSERT INTO `taggings` (`story_id`, `tag_id`) \

@@ -1,5 +1,5 @@
 use mysql_async::prelude::*;
-use mysql_async::{Conn, Error};
+use mysql_async::{Conn, Error, Row};
 use std::collections::HashSet;
 use std::future::Future;
 use std::iter;
@@ -9,9 +9,9 @@ pub(crate) async fn handle<F>(c: F, acting_as: Option<UserId>) -> Result<(Conn, 
 where
     F: 'static + Future<Output = Result<Conn, Error>> + Send,
 {
-    let c = c.await?;
+    let mut c = c.await?;
     let stories = c
-        .query(
+        .query_iter(
             "SELECT  `stories`.* FROM `stories` \
              WHERE `stories`.`merged_story_id` IS NULL \
              AND `stories`.`is_expired` = 0 \
@@ -22,7 +22,7 @@ where
     let (users, stories) = stories
         .reduce_and_drop(
             (HashSet::new(), HashSet::new()),
-            |(mut users, mut stories), story| {
+            |(mut users, mut stories), story: Row| {
                 users.insert(story.get::<u32, _>("user_id").unwrap());
                 stories.insert(story.get::<u32, _>("id").unwrap());
                 (users, stories)
@@ -47,19 +47,20 @@ where
         )
         .await?;
 
-        let tags = c
+        let stmt = c
             .prep(
                 "SELECT `tag_filters`.* FROM `tag_filters` \
                  WHERE `tag_filters`.`user_id` = ?",
             )
             .await?;
-        let (x, tags) = tags
-            .reduce_and_drop(Vec::new(), |mut tags, tag| {
+        let tags = c
+            .exec_iter(stmt, (uid,))
+            .await?
+            .reduce_and_drop(Vec::new(), |mut tags, tag: Row| {
                 tags.push(tag.get::<u32, _>("tag_id").unwrap());
                 tags
             })
             .await?;
-        c = x;
 
         if !tags.is_empty() {
             let tags = tags
@@ -106,16 +107,14 @@ where
     ))
     .await?;
 
-    let taggings = c
-        .query(&format!(
+    let tags = c
+        .query_iter(format!(
             "SELECT `taggings`.* FROM `taggings` \
              WHERE `taggings`.`story_id` IN ({})",
             stories_in
         ))
-        .await?;
-
-    let (mut c, tags) = taggings
-        .reduce_and_drop(HashSet::new(), |mut tags, tagging| {
+        .await?
+        .reduce_and_drop(HashSet::new(), |mut tags, tagging: Row| {
             tags.insert(tagging.get::<u32, _>("tag_id").unwrap());
             tags
         })

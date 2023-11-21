@@ -62,13 +62,16 @@ impl Service<bool> for MysqlTrawlerBuilder {
 
         if priming {
             // we need a special conn for setup
-            let mut opts = self.opts.clone();
-            opts.pool_opts(
-                PoolOpts::default().with_constraints(PoolConstraints::new(1, 1).unwrap()),
-            );
-            let db: String = Opts::from(opts.clone()).db_name().unwrap().to_string();
-            opts.db_name(None::<String>);
-            opts.prefer_socket(false);
+            let opts: OptsBuilder = self
+                .opts
+                .clone()
+                .pool_opts(
+                    PoolOpts::default().with_constraints(PoolConstraints::new(1, 1).unwrap()),
+                )
+                .db_name(None::<String>)
+                .prefer_socket(false);
+
+            let db: String = Opts::from(self.opts.clone()).db_name().unwrap().to_string();
             let db_drop = format!("DROP DATABASE IF EXISTS {}", db);
             let db_create = format!("CREATE DATABASE {}", db);
             let db_use = format!("USE {}", db);
@@ -338,12 +341,12 @@ fn main() -> Result<(), Error> {
     }
 
     // check that we can indeed connect
-    let mut opts = OptsBuilder::from_opts(Opts::from_url(options.dbn.as_str())?);
-    opts.tcp_nodelay(true);
-    opts.pool_opts(
-        PoolOpts::default()
-            .with_constraints(PoolConstraints::new(options.in_flight, options.in_flight).unwrap()),
-    );
+    let opts =
+        OptsBuilder::from_opts(Opts::from_url(options.dbn.as_str())?)
+            .tcp_nodelay(true)
+            .pool_opts(PoolOpts::default().with_constraints(
+                PoolConstraints::new(options.in_flight, options.in_flight).unwrap(),
+            ));
     let s = MysqlTrawlerBuilder { opts, variant };
 
     wl.run(s, options.prime);

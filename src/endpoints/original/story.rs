@@ -14,12 +14,15 @@ where
 {
     // XXX: at the end there are also a bunch of repeated, seemingly superfluous queries
     let mut c = c.await?;
-    let mut story = c
+    let stmt = c
         .prep(
             "SELECT `stories`.* \
              FROM `stories` \
              WHERE `stories`.`short_id` = ?",
         )
+        .await?;
+    let mut story = c
+        .exec_iter(stmt, (::std::str::from_utf8(&id[..]).unwrap(),))
         .await?
         .collect_and_drop::<my::Row>()
         .await?;
@@ -88,10 +91,12 @@ where
         )
         .await?;
 
-    let (users, comments) = comments
+    let (users, comments) = c
+        .exec_iter(comments, (story,))
+        .await?
         .reduce_and_drop(
             (HashSet::new(), HashSet::new()),
-            |(mut users, mut comments), comment| {
+            |(mut users, mut comments), comment: Row| {
                 users.insert(comment.get::<u32, _>("user_id").unwrap());
                 comments.insert(comment.get::<u32, _>("id").unwrap());
                 (users, comments)
@@ -153,17 +158,18 @@ where
         .await?;
     }
 
-    let taggings = c
+    let stmt = c
         .prep(
             "SELECT `taggings`.* \
              FROM `taggings` \
              WHERE `taggings`.`story_id` = ?",
-            (story,),
         )
         .await?;
 
-    let tags = taggings
-        .reduce_and_drop(HashSet::new(), |mut tags, tagging| {
+    let tags = c
+        .exec_iter(stmt, (story,))
+        .await?
+        .reduce_and_drop(HashSet::new(), |mut tags, tagging: Row| {
             tags.insert(tagging.get::<u32, _>("tag_id").unwrap());
             tags
         })

@@ -1,5 +1,5 @@
 use mysql_async::prelude::*;
-use mysql_async::{Conn, Error};
+use mysql_async::{Conn, Error, Row};
 use std::collections::HashSet;
 use std::future::Future;
 use std::iter;
@@ -14,8 +14,8 @@ where
     // but it *basically* just looks for stories in the past few days
     // because all our stories are for the same day, we add a LIMIT
     // also note the `NOW()` hack to support dbs primed a while ago
-    let c = c.await?;
-    let stories = c
+    let mut c = c.await?;
+    let stmt = c
         .query(
             "SELECT  `stories`.* FROM `stories` \
              WHERE `stories`.`merged_story_id` IS NULL \
@@ -24,10 +24,12 @@ where
              ORDER BY stories.id DESC LIMIT 51",
         )
         .await?;
-    let (users, stories) = stories
+    let (users, stories) = c
+        .query_iter(stmt)
+        .await?
         .reduce_and_drop(
             (HashSet::new(), HashSet::new()),
-            |(mut users, mut stories), story| {
+            |(mut users, mut stories), story: Row| {
                 users.insert(story.get::<u32, _>("user_id").unwrap());
                 stories.insert(story.get::<u32, _>("id").unwrap());
                 (users, stories)
@@ -44,28 +46,28 @@ where
         .join(",");
 
     if let Some(uid) = acting_as {
-        let x = c
-            .exec_drop(
-                "SELECT `hidden_stories`.`story_id` \
+        c.exec_drop(
+            "SELECT `hidden_stories`.`story_id` \
                  FROM `hidden_stories` \
                  WHERE `hidden_stories`.`user_id` = ?",
-                (uid,),
-            )
-            .await?;
+            (uid,),
+        )
+        .await?;
 
-        let tags = x
+        let stmt = c
             .prep(
                 "SELECT `tag_filters`.* FROM `tag_filters` \
                  WHERE `tag_filters`.`user_id` = ?",
             )
             .await?;
-        let (x, tags) = tags
-            .reduce_and_drop(Vec::new(), |mut tags, tag| {
+        let tags = c
+            .exec_iter(stmt, (uid,))
+            .await?
+            .reduce_and_drop(Vec::new(), |mut tags, tag: Row| {
                 tags.push(tag.get::<u32, _>("tag_id").unwrap());
                 tags
             })
             .await?;
-        c = x;
 
         if !tags.is_empty() {
             let s = stories
@@ -117,7 +119,7 @@ where
     ))
     .await?;
 
-    let taggings = c
+    let stmt = c
         .query(&format!(
             "SELECT `taggings`.* FROM `taggings` \
              WHERE `taggings`.`story_id` IN ({})",
@@ -125,8 +127,10 @@ where
         ))
         .await?;
 
-    let (mut c, tags) = taggings
-        .reduce_and_drop(HashSet::new(), |mut tags, tagging| {
+    let tags = c
+        .query_iter(stmt)
+        .await?
+        .reduce_and_drop(HashSet::new(), |mut tags, tagging: Row| {
             tags.insert(tagging.get::<u32, _>("tag_id").unwrap());
             tags
         })

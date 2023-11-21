@@ -10,5 +10,6 @@ clap = { version = "4.4", features =["derive"] }
 futures-core = "0.3.0"
 futures-util = "0.3.0"
 mysql_async = "0.33.0"
+mysql_common = { version = "0.31", features = ["chrono"] }
 tower-service = "0.3"
 trawler = "0.11.0-alpha.7"
