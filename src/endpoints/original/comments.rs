@@ -1,25 +1,24 @@
-
-use my::prelude::*;
+use mysql_async::prelude::*;
+use mysql_async::{Conn, Error};
 use std::collections::HashSet;
 use std::future::Future;
 use std::iter;
 use trawler::UserId;
 
-pub(crate) async fn handle<F>(
-    c: F,
-    acting_as: Option<UserId>,
-) -> Result<(my::Conn, bool), my::error::Error>
+pub(crate) async fn handle<F>(c: F, acting_as: Option<UserId>) -> Result<(Conn, bool), Error>
 where
-    F: 'static + Future<Output = Result<my::Conn, my::error::Error>> + Send,
+    F: 'static + Future<Output = Result<Conn, Error>> + Send,
 {
     let c = c.await?;
     let comments = c
-        .query("SELECT  `comments`.* \
+        .query(
+            "SELECT  `comments`.* \
              FROM `comments` \
              WHERE `comments`.`is_deleted` = 0 \
              AND `comments`.`is_moderated` = 0 \
              ORDER BY id DESC \
-             LIMIT 40 OFFSET 0")
+             LIMIT 40 OFFSET 0",
+        )
         .await?;
 
     let (mut c, (comments, users, stories)) = comments
@@ -40,7 +39,7 @@ where
             .chain(stories.iter().map(|c| c as &_))
             .collect();
         c = c
-            .drop_exec(
+            .exec_drop(
                 &format!(
                     "SELECT 1 FROM hidden_stories \
                      WHERE user_id = ? \
@@ -92,17 +91,16 @@ where
             .chain(comments.iter().map(|c| c as &_))
             .collect();
 
-        c = c
-            .drop_exec(
-                &format!(
-                    "SELECT `votes`.* FROM `votes` \
+        c.exec_drop(
+            &format!(
+                "SELECT `votes`.* FROM `votes` \
                      WHERE `votes`.`user_id` = ? \
                      AND `votes`.`comment_id` IN ({})",
-                    params
-                ),
-                comments,
-            )
-            .await?;
+                params
+            ),
+            comments,
+        )
+        .await?;
     }
 
     // NOTE: the real website issues all of these one by one...
@@ -112,13 +110,12 @@ where
         .collect::<Vec<_>>()
         .join(",");
 
-    c = c
-        .drop_query(&format!(
-            "SELECT  `users`.* FROM `users` \
+    c.query_drop(&format!(
+        "SELECT  `users`.* FROM `users` \
              WHERE `users`.`id` IN ({})",
-            authors
-        ))
-        .await?;
+        authors
+    ))
+    .await?;
 
     Ok((c, true))
 }

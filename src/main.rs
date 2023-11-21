@@ -2,9 +2,9 @@
 
 extern crate mysql_async as my;
 
-
 use clap::{Parser, ValueEnum};
-use my::prelude::*;
+use mysql_async::prelude::*;
+use mysql_async::{Conn, Error, Opts, OptsBuilder, Pool, PoolConstraints, PoolOpts, Row};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -13,29 +13,29 @@ use tower_service::Service;
 use trawler::{LobstersRequest, TrawlerRequest};
 
 const ORIGINAL_SCHEMA: &str = include_str!("db-schema/original.sql");
-const NORIA_SCHEMA: &str = include_str!("db-schema/noria.sql");
-const NATURAL_SCHEMA: &str = include_str!("db-schema/natural.sql");
+// const NORIA_SCHEMA: &str = include_str!("db-schema/noria.sql");
+// const NATURAL_SCHEMA: &str = include_str!("db-schema/natural.sql");
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, ValueEnum)]
 enum Variant {
     Original,
-    Noria,
-    Natural,
+    // Noria,
+    // Natural,
 }
 
 struct MysqlTrawlerBuilder {
-    opts: my::OptsBuilder,
+    opts: OptsBuilder,
     variant: Variant,
 }
 
 enum MaybeConn {
     None,
     Pending(my::futures::GetConn),
-    Ready(my::Conn),
+    Ready(Conn),
 }
 
 struct MysqlTrawler {
-    c: my::Pool,
+    c: Pool,
     next_conn: MaybeConn,
     variant: Variant,
 }
@@ -51,7 +51,7 @@ mod endpoints;
 
 impl Service<bool> for MysqlTrawlerBuilder {
     type Response = MysqlTrawler;
-    type Error = my::error::Error;
+    type Error = mysql_async::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
     fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
@@ -63,27 +63,24 @@ impl Service<bool> for MysqlTrawlerBuilder {
         if priming {
             // we need a special conn for setup
             let mut opts = self.opts.clone();
-            opts.pool_options(my::PoolOptions::with_constraints(
-                my::PoolConstraints::new(1, 1).unwrap(),
-            ));
-            let db: String = my::Opts::from(opts.clone())
-                .get_db_name()
-                .unwrap()
-                .to_string();
+            opts.pool_opts(
+                PoolOpts::default().with_constraints(PoolConstraints::new(1, 1).unwrap()),
+            );
+            let db: String = Opts::from(opts.clone()).db_name().unwrap().to_string();
             opts.db_name(None::<String>);
             opts.prefer_socket(false);
             let db_drop = format!("DROP DATABASE IF EXISTS {}", db);
             let db_create = format!("CREATE DATABASE {}", db);
             let db_use = format!("USE {}", db);
             Box::pin(async move {
-                let mut c = my::Conn::new(opts).await?;
-                c = c.drop_query(&db_drop).await?;
-                c = c.drop_query(&db_create).await?;
-                c = c.drop_query(&db_use).await?;
+                let mut c = Conn::new(opts).await?;
+                c.query_drop(&db_drop).await?;
+                c.query_drop(&db_create).await?;
+                c.query_drop(&db_use).await?;
                 let schema = match variant {
                     Variant::Original => ORIGINAL_SCHEMA,
-                    Variant::Noria => NORIA_SCHEMA,
-                    Variant::Natural => NATURAL_SCHEMA,
+                    // Variant::Noria => NORIA_SCHEMA,
+                    // Variant::Natural => NATURAL_SCHEMA,
                 };
                 let mut current_q = String::new();
                 for line in schema.lines() {
@@ -95,13 +92,13 @@ impl Service<bool> for MysqlTrawlerBuilder {
                     }
                     current_q.push_str(line);
                     if current_q.ends_with(';') {
-                        c = c.drop_query(&current_q).await?;
+                        c.query_drop(&current_q).await?;
                         current_q.clear();
                     }
                 }
 
                 Ok(MysqlTrawler {
-                    c: my::Pool::new(orig_opts.clone()),
+                    c: Pool::new(orig_opts.clone()),
                     next_conn: MaybeConn::None,
                     variant,
                 })
@@ -109,7 +106,7 @@ impl Service<bool> for MysqlTrawlerBuilder {
         } else {
             Box::pin(async move {
                 Ok(MysqlTrawler {
-                    c: my::Pool::new(orig_opts.clone()),
+                    c: Pool::new(orig_opts.clone()),
                     next_conn: MaybeConn::None,
                     variant,
                 })
@@ -120,7 +117,7 @@ impl Service<bool> for MysqlTrawlerBuilder {
 
 impl Service<TrawlerRequest> for MysqlTrawler {
     type Response = ();
-    type Error = my::error::Error;
+    type Error = mysql_async::Error;
     type Future = impl Future<Output = Result<Self::Response, Self::Error>> + Send;
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         loop {
@@ -207,9 +204,9 @@ impl Service<TrawlerRequest> for MysqlTrawler {
                         endpoints::$module::recent::handle(c, acting_as).await
                     }
                     LobstersRequest::Login => {
-                        let c = c.await?;
-                        let (mut c, user) = c
-                            .first_exec::<_, _, my::Row>(
+                        let mut c = c.await?;
+                        let user = c
+                            .exec_first::<Row, _, _>(
                                 "SELECT 1 as one FROM `users` WHERE `users`.`username` = ?",
                                 (format!("user{}", acting_as.unwrap()),),
                             )
@@ -217,12 +214,11 @@ impl Service<TrawlerRequest> for MysqlTrawler {
 
                         if user.is_none() {
                             let uid = acting_as.unwrap();
-                            c = c
-                                .drop_exec(
-                                    "INSERT INTO `users` (`username`) VALUES (?)",
-                                    (format!("user{}", uid),),
-                                )
-                                .await?;
+                            c.exec_drop(
+                                "INSERT INTO `users` (`username`) VALUES (?)",
+                                (format!("user{}", uid),),
+                            )
+                            .await?;
                         }
 
                         Ok((c, false))
@@ -255,8 +251,8 @@ impl Service<TrawlerRequest> for MysqlTrawler {
             let inner = async move {
                 let (c, with_notifications) = match variant {
                     Variant::Original => handle_req!(original, req),
-                    Variant::Noria => handle_req!(noria, req),
-                    Variant::Natural => handle_req!(natural, req),
+                    // Variant::Noria => handle_req!(noria, req),
+                    // Variant::Natural => handle_req!(natural, req),
                 }?;
 
                 // notifications
@@ -264,8 +260,8 @@ impl Service<TrawlerRequest> for MysqlTrawler {
                     if with_notifications && !priming {
                         match variant {
                             Variant::Original => endpoints::original::notifications(c, uid).await,
-                            Variant::Noria => endpoints::noria::notifications(c, uid).await,
-                            Variant::Natural => endpoints::natural::notifications(c, uid).await,
+                            // Variant::Noria => endpoints::noria::notifications(c, uid).await,
+                            // Variant::Natural => endpoints::natural::notifications(c, uid).await,
                         }?;
                     }
                 }
@@ -277,7 +273,9 @@ impl Service<TrawlerRequest> for MysqlTrawler {
             // outstanding requests. that's fine.
             match inner.await {
                 Ok(())
-                | Err(my::error::Error::Driver(my::error::DriverError::PoolDisconnected)) => Ok(()),
+                | Err(mysql_async::Error::Driver(mysql_async::DriverError::PoolDisconnected)) => {
+                    Ok(())
+                }
                 Err(e) => Err(e),
             }
         })
@@ -301,7 +299,7 @@ struct Options {
     scale: f64,
 
     /// Number of allowed concurrent requests
-    #[arg(long,  default_value = "50")]
+    #[arg(long, default_value = "50")]
     in_flight: usize,
 
     /// Set if the backend must be primed with initial stories and comments.
@@ -309,8 +307,8 @@ struct Options {
     prime: bool,
 
     /// Which set of queries to run
-    #[arg(long, required = true)]
-    queries: Variant,
+    // #[arg(long, required = true)]
+    // queries: Variant,
 
     /// Benchmark runtime in seconds
     #[arg(short = 'r', long, default_value = "30")]
@@ -326,9 +324,10 @@ struct Options {
     dbn: String,
 }
 
-fn main() {
+fn main() -> Result<(), Error> {
     let options = Options::parse();
-    
+    let variant = Variant::Original;
+
     let mut wl = trawler::WorkloadBuilder::default();
     wl.scale(options.scale)
         .time(time::Duration::from_secs(options.runtime))
@@ -339,15 +338,14 @@ fn main() {
     }
 
     // check that we can indeed connect
-    let mut opts = my::OptsBuilder::from_opts(options.dbn);
+    let mut opts = OptsBuilder::from_opts(Opts::from_url(options.dbn.as_str())?);
     opts.tcp_nodelay(true);
-    opts.pool_options(my::PoolOptions::with_constraints(
-        my::PoolConstraints::new(options.in_flight, options.in_flight).unwrap(),
-    ));
-    let s = MysqlTrawlerBuilder {
-        opts,
-        variant: options.queries,
-    };
+    opts.pool_opts(
+        PoolOpts::default()
+            .with_constraints(PoolConstraints::new(options.in_flight, options.in_flight).unwrap()),
+    );
+    let s = MysqlTrawlerBuilder { opts, variant };
 
     wl.run(s, options.prime);
+    Ok(())
 }

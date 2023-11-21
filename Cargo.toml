@@ -9,6 +9,6 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.4", features =["derive"] }
 futures-core = "0.3.0"
 futures-util = "0.3.0"
-mysql_async = "0.23.0" ## update me to >= 0.33
+mysql_async = "0.33.0"
 tower-service = "0.3"
 trawler = "0.11.0-alpha.7"

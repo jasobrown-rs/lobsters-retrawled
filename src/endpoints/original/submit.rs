@@ -1,6 +1,5 @@
-
-
-use my::prelude::*;
+use mysql_async::prelude::*;
+use mysql_async::{Conn, Error, Row};
 use std::future::Future;
 use trawler::{StoryId, UserId};
 
@@ -10,16 +9,16 @@ pub(crate) async fn handle<F>(
     id: StoryId,
     title: String,
     priming: bool,
-) -> Result<(my::Conn, bool), my::error::Error>
+) -> Result<(Conn, bool), Error>
 where
-    F: 'static + Future<Output = Result<my::Conn, my::error::Error>> + Send,
+    F: 'static + Future<Output = Result<Conn, Error>> + Send,
 {
     let c = c.await?;
     let user = acting_as.unwrap();
 
     // check that tags are active
-    let (mut c, tag) = c
-        .first::<_, my::Row>(
+    let tag = c
+        .query_first::<Row, _>(
             "SELECT  `tags`.* FROM `tags` \
              WHERE `tags`.`inactive` = 0 AND `tags`.`tag` IN ('test')",
         )
@@ -28,13 +27,12 @@ where
 
     if !priming {
         // check that story id isn't already assigned
-        c = c
-            .drop_exec(
-                "SELECT  1 AS one FROM `stories` \
+        c.exec_drop(
+            "SELECT  1 AS one FROM `stories` \
                  WHERE `stories`.`short_id` = ?",
-                (::std::str::from_utf8(&id[..]).unwrap(),),
-            )
-            .await?;
+            (::std::str::from_utf8(&id[..]).unwrap(),),
+        )
+        .await?;
     }
 
     // TODO: check for similar stories if there's a url
@@ -58,7 +56,7 @@ where
     // NOTE: MySQL technically does everything inside this and_then in a transaction,
     // but let's be nice to it
     let q = c
-        .prep_exec(
+        .prep(
             "INSERT INTO `stories` \
              (`created_at`, `user_id`, `title`, \
              `description`, `short_id`, `upvotes`, `hotness`, \
@@ -79,77 +77,70 @@ where
     let story = q.last_insert_id().unwrap();
     let mut c = q.drop_result().await?;
 
-    c = c
-        .drop_exec(
-            "INSERT INTO `taggings` (`story_id`, `tag_id`) \
+    c.exec_drop(
+        "INSERT INTO `taggings` (`story_id`, `tag_id`) \
              VALUES (?, ?)",
-            (story, tag),
-        )
-        .await?;
+        (story, tag),
+    )
+    .await?;
 
     let key = format!("user:{}:stories_submitted", user);
-    c = c
-        .drop_exec(
-            "INSERT INTO keystores (`key`, `value`) \
+    c.exec_drop(
+        "INSERT INTO keystores (`key`, `value`) \
              VALUES (?, ?) \
              ON DUPLICATE KEY UPDATE `keystores`.`value` = `keystores`.`value` + 1",
-            (key, 1),
-        )
-        .await?;
+        (key, 1),
+    )
+    .await?;
 
     if !priming {
         let key = format!("user:{}:stories_submitted", user);
-        c = c
-            .drop_exec(
-                "SELECT  `keystores`.* \
+        c.exec_drop(
+            "SELECT  `keystores`.* \
                  FROM `keystores` \
                  WHERE `keystores`.`key` = ?",
-                (key,),
-            )
-            .await?;
-
-        c = c
-            .drop_exec(
-                "SELECT  `votes`.* FROM `votes` \
-                 WHERE `votes`.`user_id` = ? \
-                 AND `votes`.`story_id` = ? \
-                 AND `votes`.`comment_id` IS NULL",
-                (user, story),
-            )
-            .await?;
-    }
-
-    c = c
-        .drop_exec(
-            "INSERT INTO `votes` (`user_id`, `story_id`, `vote`) \
-             VALUES (?, ?, ?)",
-            (user, story, 1),
+            (key,),
         )
         .await?;
 
+        c.exec_drop(
+            "SELECT  `votes`.* FROM `votes` \
+                 WHERE `votes`.`user_id` = ? \
+                 AND `votes`.`story_id` = ? \
+                 AND `votes`.`comment_id` IS NULL",
+            (user, story),
+        )
+        .await?;
+    }
+
+    c.exec_drop(
+        "INSERT INTO `votes` (`user_id`, `story_id`, `vote`) \
+             VALUES (?, ?, ?)",
+        (user, story, 1),
+    )
+    .await?;
+
     if !priming {
-        c = c
-            .drop_exec(
-                "SELECT \
+        c.exec_drop(
+            "SELECT \
                  `comments`.`upvotes`, \
                  `comments`.`downvotes` \
                  FROM `comments` \
                  JOIN `stories` ON (`stories`.`id` = `comments`.`story_id`) \
                  WHERE `comments`.`story_id` = ? \
                  AND `comments`.`user_id` <> `stories`.`user_id`",
-                (story,),
-            )
-            .await?;
+            (story,),
+        )
+        .await?;
 
         // why oh why is story hotness *updated* here?!
-        c = c
-            .drop_exec(
-                "UPDATE `stories` \
+        c.exec_drop(
+            "UPDATE `stories` \
                  SET `hotness` = ? \
                  WHERE `stories`.`id` = ?",
-                (-19216.5479744, story),
-            )
-            .await?;
+            (-19216.5479744, story),
+        )
+        .await?;
     }
 
     Ok((c, false))

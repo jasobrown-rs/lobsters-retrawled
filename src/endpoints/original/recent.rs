@@ -1,16 +1,13 @@
-
-use my::prelude::*;
+use mysql_async::prelude::*;
+use mysql_async::{Conn, Error};
 use std::collections::HashSet;
 use std::future::Future;
 use std::iter;
 use trawler::UserId;
 
-pub(crate) async fn handle<F>(
-    c: F,
-    acting_as: Option<UserId>,
-) -> Result<(my::Conn, bool), my::error::Error>
+pub(crate) async fn handle<F>(c: F, acting_as: Option<UserId>) -> Result<(Conn, bool), Error>
 where
-    F: 'static + Future<Output = Result<my::Conn, my::error::Error>> + Send,
+    F: 'static + Future<Output = Result<Conn, Error>> + Send,
 {
     // /recent is a little weird:
     // https://github.com/lobsters/lobsters/blob/50b4687aeeec2b2d60598f63e06565af226f93e3/app/models/story_repository.rb#L41
@@ -27,7 +24,7 @@ where
              ORDER BY stories.id DESC LIMIT 51",
         )
         .await?;
-    let (mut c, (users, stories)) = stories
+    let (users, stories) = stories
         .reduce_and_drop(
             (HashSet::new(), HashSet::new()),
             |(mut users, mut stories), story| {
@@ -48,7 +45,7 @@ where
 
     if let Some(uid) = acting_as {
         let x = c
-            .drop_exec(
+            .exec_drop(
                 "SELECT `hidden_stories`.`story_id` \
                  FROM `hidden_stories` \
                  WHERE `hidden_stories`.`user_id` = ?",
@@ -57,10 +54,9 @@ where
             .await?;
 
         let tags = x
-            .prep_exec(
+            .prep(
                 "SELECT `tag_filters`.* FROM `tag_filters` \
                  WHERE `tag_filters`.`user_id` = ?",
-                (uid,),
             )
             .await?;
         let (x, tags) = tags
@@ -83,15 +79,14 @@ where
                 .collect::<Vec<_>>()
                 .join(",");
 
-            c = c
-                .drop_query(format!(
-                    "SELECT `taggings`.`story_id` \
+            c.query_drop(format!(
+                "SELECT `taggings`.`story_id` \
                      FROM `taggings` \
                      WHERE `taggings`.`story_id` IN ({}) \
                      AND `taggings`.`tag_id` IN ({})",
-                    s, tags
-                ))
-                .await?;
+                s, tags
+            ))
+            .await?;
         }
     }
 
@@ -100,30 +95,27 @@ where
         .map(|id| format!("{}", id))
         .collect::<Vec<_>>()
         .join(",");
-    c = c
-        .drop_query(&format!(
-            "SELECT `users`.* FROM `users` WHERE `users`.`id` IN ({})",
-            users,
-        ))
-        .await?;
+    c.query_drop(&format!(
+        "SELECT `users`.* FROM `users` WHERE `users`.`id` IN ({})",
+        users,
+    ))
+    .await?;
 
-    c = c
-        .drop_query(&format!(
-            "SELECT `suggested_titles`.* \
+    c.query_drop(&format!(
+        "SELECT `suggested_titles`.* \
              FROM `suggested_titles` \
              WHERE `suggested_titles`.`story_id` IN ({})",
-            stories_in
-        ))
-        .await?;
+        stories_in
+    ))
+    .await?;
 
-    c = c
-        .drop_query(&format!(
-            "SELECT `suggested_taggings`.* \
+    c.query_drop(&format!(
+        "SELECT `suggested_taggings`.* \
              FROM `suggested_taggings` \
              WHERE `suggested_taggings`.`story_id` IN ({})",
-            stories_in
-        ))
-        .await?;
+        stories_in
+    ))
+    .await?;
 
     let taggings = c
         .query(&format!(
@@ -145,12 +137,11 @@ where
         .map(|id| format!("{}", id))
         .collect::<Vec<_>>()
         .join(",");
-    c = c
-        .drop_query(&format!(
-            "SELECT `tags`.* FROM `tags` WHERE `tags`.`id` IN ({})",
-            tags
-        ))
-        .await?;
+    c.query_drop(&format!(
+        "SELECT `tags`.* FROM `tags` WHERE `tags`.`id` IN ({})",
+        tags
+    ))
+    .await?;
 
     // also load things that we need to highlight
     if let Some(uid) = acting_as {
@@ -158,50 +149,47 @@ where
         let values: Vec<_> = iter::once(&uid as &_)
             .chain(stories.iter().map(|s| s as &_))
             .collect();
-        c = c
-            .drop_exec(
-                &format!(
-                    "SELECT `votes`.* FROM `votes` \
+        c.exec_drop(
+            &format!(
+                "SELECT `votes`.* FROM `votes` \
                      WHERE `votes`.`user_id` = ? \
                      AND `votes`.`story_id` IN ({}) \
                      AND `votes`.`comment_id` IS NULL",
-                    story_params
-                ),
-                values,
-            )
-            .await?;
+                story_params
+            ),
+            values,
+        )
+        .await?;
 
         let values: Vec<_> = iter::once(&uid as &_)
             .chain(stories.iter().map(|s| s as &_))
             .collect();
-        c = c
-            .drop_exec(
-                &format!(
-                    "SELECT `hidden_stories`.* \
+        c.exec_drop(
+            &format!(
+                "SELECT `hidden_stories`.* \
                      FROM `hidden_stories` \
                      WHERE `hidden_stories`.`user_id` = ? \
                      AND `hidden_stories`.`story_id` IN ({})",
-                    story_params
-                ),
-                values,
-            )
-            .await?;
+                story_params
+            ),
+            values,
+        )
+        .await?;
 
         let values: Vec<_> = iter::once(&uid as &_)
             .chain(stories.iter().map(|s| s as &_))
             .collect();
-        c = c
-            .drop_exec(
-                &format!(
-                    "SELECT `saved_stories`.* \
+        c.exec_drop(
+            &format!(
+                "SELECT `saved_stories`.* \
                      FROM `saved_stories` \
                      WHERE `saved_stories`.`user_id` = ? \
                      AND `saved_stories`.`story_id` IN ({})",
-                    story_params
-                ),
-                values,
-            )
-            .await?;
+                story_params
+            ),
+            values,
+        )
+        .await?;
     }
 
     Ok((c, true))

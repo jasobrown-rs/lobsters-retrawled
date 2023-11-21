@@ -1,6 +1,5 @@
-
-
-use my::prelude::*;
+use mysql_async::prelude::*;
+use mysql_async::{Conn, Error, Row};
 use std::future::Future;
 use trawler::{CommentId, StoryId, UserId};
 
@@ -11,14 +10,14 @@ pub(crate) async fn handle<F>(
     story: StoryId,
     parent: Option<CommentId>,
     priming: bool,
-) -> Result<(my::Conn, bool), my::error::Error>
+) -> Result<(Conn, bool), Error>
 where
-    F: 'static + Future<Output = Result<my::Conn, my::error::Error>> + Send,
+    F: 'static + Future<Output = Result<Conn, Error>> + Send,
 {
     let c = c.await?;
     let user = acting_as.unwrap();
-    let (mut c, story) = c
-        .first_exec::<_, _, my::Row>(
+    let story = c
+        .exec_first::<Row, _, _>(
             "SELECT `stories`.* \
              FROM `stories` \
              WHERE `stories`.`short_id` = ?",
@@ -31,25 +30,23 @@ where
     let story = story.get::<u32, _>("id").unwrap();
 
     if !priming {
-        c = c
-            .drop_exec(
-                "SELECT `users`.* FROM `users` WHERE `users`.`id` = ?",
-                (author,),
-            )
-            .await?;
+        c.exec_drop(
+            "SELECT `users`.* FROM `users` WHERE `users`.`id` = ?",
+            (author,),
+        )
+        .await?;
     }
 
     let parent = if let Some(parent) = parent {
         // check that parent exists
-        let (x, p) = c
-            .first_exec::<_, _, my::Row>(
+        let p = c
+            .exec_first::<Row, _, _>(
                 "SELECT  `comments`.* FROM `comments` \
                  WHERE `comments`.`story_id` = ? \
                  AND `comments`.`short_id` = ?",
                 (story, ::std::str::from_utf8(&parent[..]).unwrap()),
             )
             .await?;
-        c = x;
 
         if let Some(p) = p {
             Some((
@@ -73,13 +70,12 @@ where
 
     if !priming {
         // check that short id is available
-        c = c
-            .drop_exec(
-                "SELECT  1 AS one FROM `comments` \
+        c.exec_drop(
+            "SELECT  1 AS one FROM `comments` \
                  WHERE `comments`.`short_id` = ?",
-                (::std::str::from_utf8(&id[..]).unwrap(),),
-            )
-            .await?;
+            (::std::str::from_utf8(&id[..]).unwrap(),),
+        )
+        .await?;
     }
 
     // TODO: real impl checks *new* short_id *again*
@@ -88,46 +84,22 @@ where
     // but let's be nice to it
     let now = chrono::Local::now().naive_local();
     let q = if let Some((parent, thread)) = parent {
-        c.prep_exec(
+        c.prep(
             "INSERT INTO `comments` \
              (`created_at`, `updated_at`, `short_id`, `story_id`, \
              `user_id`, `parent_comment_id`, `thread_id`, \
              `comment`, `upvotes`, `confidence`, \
              `markeddown_comment`) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                now,
-                now,
-                ::std::str::from_utf8(&id[..]).unwrap(),
-                story,
-                user,
-                parent,
-                thread,
-                "moar benchmarking", // lorem ipsum?
-                1,
-                0.1828847834138887,
-                "<p>moar benchmarking</p>\n",
-            ),
         )
         .await?
     } else {
-        c.prep_exec(
+        c.prep(
             "INSERT INTO `comments` \
              (`created_at`, `updated_at`, `short_id`, `story_id`, \
              `user_id`, `comment`, `upvotes`, `confidence`, \
              `markeddown_comment`) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                now,
-                now,
-                ::std::str::from_utf8(&id[..]).unwrap(),
-                story,
-                user,
-                "moar benchmarking", // lorem ipsum?
-                1,
-                0.1828847834138887,
-                "<p>moar benchmarking</p>\n",
-            ),
         )
         .await?
     };
@@ -136,114 +108,104 @@ where
 
     if !priming {
         // but why?!
-        c = c
-            .drop_exec(
-                "SELECT  `votes`.* FROM `votes` \
+        c.exec_drop(
+            "SELECT  `votes`.* FROM `votes` \
                  WHERE `votes`.`user_id` = ? \
                  AND `votes`.`story_id` = ? \
                  AND `votes`.`comment_id` = ?",
-                (user, story, comment),
-            )
-            .await?;
+            (user, story, comment),
+        )
+        .await?;
     }
 
-    c = c
-        .drop_exec(
-            "INSERT INTO `votes` \
+    c.exec_drop(
+        "INSERT INTO `votes` \
              (`user_id`, `story_id`, `comment_id`, `vote`) \
              VALUES (?, ?, ?, ?)",
-            (user, story, comment, 1),
-        )
-        .await?;
+        (user, story, comment, 1),
+    )
+    .await?;
 
-    c = c
-        .drop_exec(
-            "SELECT `stories`.`id` \
+    c.exec_drop(
+        "SELECT `stories`.`id` \
              FROM `stories` \
              WHERE `stories`.`merged_story_id` = ?",
-            (story,),
-        )
-        .await?;
+        (story,),
+    )
+    .await?;
 
     // why are these ordered?
-    let (mut c, count) = c
-        .prep_exec(
+    let count = c
+        .prep(
             "SELECT `comments`.* \
              FROM `comments` \
              WHERE `comments`.`story_id` = ? \
              ORDER BY \
              (upvotes - downvotes) < 0 ASC, \
              confidence DESC",
-            (story,),
         )
         .await?
         .reduce_and_drop(0, |rows, _| rows + 1)
         .await?;
 
-    c = c
-        .drop_exec(
-            "UPDATE `stories` \
+    c.exec_drop(
+        "UPDATE `stories` \
                                              SET `comments_count` = ?
                                              WHERE `stories`.`id` = ?",
-            (count, story),
-        )
-        .await?;
+        (count, story),
+    )
+    .await?;
 
     if !priming {
         // get all the stuff needed to compute updated hotness
-        c = c
-            .drop_exec(
-                "SELECT `tags`.* \
+        c.exec_drop(
+            "SELECT `tags`.* \
                  FROM `tags` \
                  INNER JOIN `taggings` \
                  ON `tags`.`id` = `taggings`.`tag_id` \
                  WHERE `taggings`.`story_id` = ?",
-                (story,),
-            )
-            .await?;
+            (story,),
+        )
+        .await?;
 
-        c = c
-            .drop_exec(
-                "SELECT \
+        c.exec_drop(
+            "SELECT \
                  `comments`.`upvotes`, \
                  `comments`.`downvotes` \
                  FROM `comments` \
                  JOIN `stories` ON (`stories`.`id` = `comments`.`story_id`) \
                  WHERE `comments`.`story_id` = ? \
                  AND `comments`.`user_id` <> `stories`.`user_id`",
-                (story,),
-            )
-            .await?;
+            (story,),
+        )
+        .await?;
 
-        c = c
-            .drop_exec(
-                "SELECT `stories`.`id` \
+        c.exec_drop(
+            "SELECT `stories`.`id` \
                  FROM `stories` \
                  WHERE `stories`.`merged_story_id` = ?",
-                (story,),
-            )
-            .await?;
+            (story,),
+        )
+        .await?;
     }
 
     // why oh why is story hotness *updated* here?!
-    c = c
-        .drop_exec(
-            "UPDATE `stories` \
+    c.exec_drop(
+        "UPDATE `stories` \
              SET `hotness` = ? \
              WHERE `stories`.`id` = ?",
-            (hotness - 1.0, story),
-        )
-        .await?;
+        (hotness - 1.0, story),
+    )
+    .await?;
 
     let key = format!("user:{}:comments_posted", user);
-    c = c
-        .drop_exec(
-            "INSERT INTO keystores (`key`, `value`) \
+    c.exec_drop(
+        "INSERT INTO keystores (`key`, `value`) \
              VALUES (?, ?) \
              ON DUPLICATE KEY UPDATE `keystores`.`value` = `keystores`.`value` + 1",
-            (key, 1),
-        )
-        .await?;
+        (key, 1),
+    )
+    .await?;
 
     Ok((c, false))
 }

@@ -8,29 +8,29 @@ pub(crate) mod story_vote;
 pub(crate) mod submit;
 pub(crate) mod user;
 
+use mysql_async::prelude::*;
 
-use my::prelude::*;
-
-pub(crate) async fn notifications(mut c: my::Conn, uid: u32) -> Result<my::Conn, my::error::Error> {
-    c = c
-        .drop_exec(
-            "SELECT COUNT(*) \
+pub(crate) async fn notifications(
+    mut c: my::Conn,
+    uid: u32,
+) -> Result<my::Conn, mysql_async::Error> {
+    c.exec_drop(
+        "SELECT COUNT(*) \
                      FROM `replying_comments_for_count`
                      WHERE `replying_comments_for_count`.`user_id` = ? \
                      GROUP BY `replying_comments_for_count`.`user_id` \
                      ",
-            (uid,),
-        )
-        .await?;
+        (uid,),
+    )
+    .await?;
 
-    c = c
-        .drop_exec(
-            "SELECT `keystores`.* \
+    c.exec_drop(
+        "SELECT `keystores`.* \
              FROM `keystores` \
              WHERE `keystores`.`key` = ?",
-            (format!("user:{}:unread_messages", uid),),
-        )
-        .await?;
+        (format!("user:{}:unread_messages", uid),),
+    )
+    .await?;
 
     Ok(c)
 }
