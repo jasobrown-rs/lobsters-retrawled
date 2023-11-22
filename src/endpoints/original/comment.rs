@@ -105,6 +105,8 @@ where
                 parent,
                 thread,
                 "moar benchmarking", // lorem ipsum?
+                1,
+                0.1828847834138887,
                 "<p>moar benchmarking</p>\n",
             ),
         )
@@ -128,6 +130,8 @@ where
                 story,
                 user,
                 "moar benchmarking", // lorem ipsum?
+                1,
+                0.1828847834138887,
                 "<p>moar benchmarking</p>\n",
             ),
         )
