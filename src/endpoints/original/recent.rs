@@ -15,17 +15,14 @@ where
     // because all our stories are for the same day, we add a LIMIT
     // also note the `NOW()` hack to support dbs primed a while ago
     let mut c = c.await?;
-    let stmt = c
-        .query(
+    let (users, stories) = c
+        .query_iter(
             "SELECT  `stories`.* FROM `stories` \
              WHERE `stories`.`merged_story_id` IS NULL \
              AND `stories`.`is_expired` = 0 \
              AND CAST(upvotes AS signed) - CAST(downvotes AS signed) <= 5 \
              ORDER BY stories.id DESC LIMIT 51",
         )
-        .await?;
-    let (users, stories) = c
-        .query_iter(stmt)
         .await?
         .reduce_and_drop(
             (HashSet::new(), HashSet::new()),
@@ -119,16 +116,12 @@ where
     ))
     .await?;
 
-    let stmt = c
-        .query(&format!(
+    let tags = c
+        .query_iter(&format!(
             "SELECT `taggings`.* FROM `taggings` \
              WHERE `taggings`.`story_id` IN ({})",
             stories_in
         ))
-        .await?;
-
-    let tags = c
-        .query_iter(stmt)
         .await?
         .reduce_and_drop(HashSet::new(), |mut tags, tagging: Row| {
             tags.insert(tagging.get::<u32, _>("tag_id").unwrap());

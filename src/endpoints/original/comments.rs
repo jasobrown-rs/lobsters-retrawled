@@ -10,8 +10,9 @@ where
     F: 'static + Future<Output = Result<Conn, Error>> + Send,
 {
     let mut c = c.await?;
-    let stmt = c
-        .query(
+
+    let (comments, users, stories) = c
+        .query_iter(
             "SELECT  `comments`.* \
              FROM `comments` \
              WHERE `comments`.`is_deleted` = 0 \
@@ -19,10 +20,6 @@ where
              ORDER BY id DESC \
              LIMIT 40 OFFSET 0",
         )
-        .await?;
-
-    let (comments, users, stories) = c
-        .query_iter(stmt)
         .await?
         .reduce_and_drop(
             (Vec::new(), HashSet::new(), HashSet::new()),
@@ -70,16 +67,12 @@ where
         .collect::<Vec<_>>()
         .join(",");
 
-    let stmt = c
-        .query(&format!(
+    let authors = c
+        .query_iter(&format!(
             "SELECT  `stories`.* FROM `stories` \
              WHERE `stories`.`id` IN ({})",
             stories
         ))
-        .await?;
-
-    let authors = c
-        .query_iter(stmt)
         .await?
         .reduce_and_drop(HashSet::new(), |mut authors, story: Row| {
             authors.insert(story.get::<u32, _>("user_id").unwrap());
