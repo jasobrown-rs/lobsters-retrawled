@@ -19,7 +19,12 @@ where
             (format!("user{}", uid),),
         )
         .await?;
-    let uid = user.unwrap().get::<u32, _>("id").unwrap();
+    let uid = match user {
+        Some(uid) => uid.get::<u32, _>("id").unwrap(),
+        None => {
+            return Ok((c, false));
+        }
+    };
 
     // most popular tag
     c.exec_drop(

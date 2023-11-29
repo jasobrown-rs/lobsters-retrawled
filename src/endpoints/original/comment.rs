@@ -171,11 +171,12 @@ where
     // why are these ordered?
     let stmt = c
         .prep(
-            "SELECT `comments`.* \
+            "SELECT `comments`.*, \
+             `comments`.`upvotes` - `comments`.`downvotes` AS saldo \
              FROM `comments` \
              WHERE `comments`.`story_id` = ? \
              ORDER BY \
-             (upvotes - downvotes) < 0 ASC, \
+             saldo ASC, \
              confidence DESC",
         )
         .await?;
