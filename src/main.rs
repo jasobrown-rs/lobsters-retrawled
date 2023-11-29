@@ -13,13 +13,13 @@ use tower_service::Service;
 use trawler::{LobstersRequest, TrawlerRequest};
 
 const ORIGINAL_SCHEMA: &str = include_str!("db-schema/original.sql");
-// const NORIA_SCHEMA: &str = include_str!("db-schema/noria.sql");
+const NORIA_SCHEMA: &str = include_str!("db-schema/noria.sql");
 // const NATURAL_SCHEMA: &str = include_str!("db-schema/natural.sql");
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, ValueEnum)]
 enum Variant {
     Original,
-    // Noria,
+    Noria,
     // Natural,
 }
 
@@ -82,7 +82,7 @@ impl Service<bool> for MysqlTrawlerBuilder {
                 c.query_drop(&db_use).await?;
                 let schema = match variant {
                     Variant::Original => ORIGINAL_SCHEMA,
-                    // Variant::Noria => NORIA_SCHEMA,
+                    Variant::Noria => NORIA_SCHEMA,
                     // Variant::Natural => NATURAL_SCHEMA,
                 };
                 let mut current_q = String::new();
@@ -254,7 +254,7 @@ impl Service<TrawlerRequest> for MysqlTrawler {
             let inner = async move {
                 let (c, with_notifications) = match variant {
                     Variant::Original => handle_req!(original, req),
-                    // Variant::Noria => handle_req!(noria, req),
+                    Variant::Noria => handle_req!(noria, req),
                     // Variant::Natural => handle_req!(natural, req),
                 }?;
 
@@ -263,7 +263,7 @@ impl Service<TrawlerRequest> for MysqlTrawler {
                     if with_notifications && !priming {
                         match variant {
                             Variant::Original => endpoints::original::notifications(c, uid).await,
-                            // Variant::Noria => endpoints::noria::notifications(c, uid).await,
+                            Variant::Noria => endpoints::noria::notifications(c, uid).await,
                             // Variant::Natural => endpoints::natural::notifications(c, uid).await,
                         }?;
                     }
