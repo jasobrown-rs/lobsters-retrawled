@@ -14,13 +14,13 @@ use trawler::{LobstersRequest, TrawlerRequest};
 
 const ORIGINAL_SCHEMA: &str = include_str!("db-schema/original.sql");
 const NORIA_SCHEMA: &str = include_str!("db-schema/noria.sql");
-// const NATURAL_SCHEMA: &str = include_str!("db-schema/natural.sql");
+const NATURAL_SCHEMA: &str = include_str!("db-schema/natural.sql");
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, ValueEnum)]
 enum Variant {
     Original,
     Noria,
-    // Natural,
+    //    Natural,
 }
 
 struct MysqlTrawlerBuilder {
@@ -83,7 +83,7 @@ impl Service<bool> for MysqlTrawlerBuilder {
                 let schema = match variant {
                     Variant::Original => ORIGINAL_SCHEMA,
                     Variant::Noria => NORIA_SCHEMA,
-                    // Variant::Natural => NATURAL_SCHEMA,
+                    //                    Variant::Natural => NATURAL_SCHEMA,
                 };
                 let mut current_q = String::new();
                 for line in schema.lines() {
@@ -94,6 +94,7 @@ impl Service<bool> for MysqlTrawlerBuilder {
                         current_q.push(' ');
                     }
                     current_q.push_str(line);
+                    println!("NEXT DML: {:?}", &current_q);
                     if current_q.ends_with(';') {
                         c.query_drop(&current_q).await?;
                         current_q.clear();
@@ -255,7 +256,7 @@ impl Service<TrawlerRequest> for MysqlTrawler {
                 let (c, with_notifications) = match variant {
                     Variant::Original => handle_req!(original, req),
                     Variant::Noria => handle_req!(noria, req),
-                    // Variant::Natural => handle_req!(natural, req),
+                    //                    Variant::Natural => handle_req!(natural, req),
                 }?;
 
                 // notifications
@@ -264,7 +265,7 @@ impl Service<TrawlerRequest> for MysqlTrawler {
                         match variant {
                             Variant::Original => endpoints::original::notifications(c, uid).await,
                             Variant::Noria => endpoints::noria::notifications(c, uid).await,
-                            // Variant::Natural => endpoints::natural::notifications(c, uid).await,
+                            //                            Variant::Natural => endpoints::natural::notifications(c, uid).await,
                         }?;
                     }
                 }
