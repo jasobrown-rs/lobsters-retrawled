@@ -310,8 +310,8 @@ struct Options {
     prime: bool,
 
     /// Which set of queries to run
-    // #[arg(long, required = true)]
-    // queries: Variant,
+    #[arg(long, default_value = "original")]
+    queries: Variant,
 
     /// Benchmark runtime in seconds
     #[arg(short = 'r', long, default_value = "30")]
@@ -329,7 +329,6 @@ struct Options {
 
 fn main() -> Result<(), Error> {
     let options = Options::parse();
-    let variant = Variant::Original;
 
     let mut wl = trawler::WorkloadBuilder::default();
     wl.scale(options.scale)
@@ -341,13 +340,22 @@ fn main() -> Result<(), Error> {
     }
 
     // check that we can indeed connect
-    let opts =
-        OptsBuilder::from_opts(Opts::from_url(options.dbn.as_str())?)
-            .tcp_nodelay(true)
-            .pool_opts(PoolOpts::default().with_constraints(
-                PoolConstraints::new(options.in_flight, options.in_flight).unwrap(),
-            ));
-    let s = MysqlTrawlerBuilder { opts, variant };
+    let opts = OptsBuilder::from_opts(Opts::from_url(options.dbn.as_str())?)
+        .tcp_nodelay(true)
+        .pool_opts(
+            // Note: version 0.23.0 of the mysql-async driver did not automatically
+            // reset the connection when it went back into the pool. version 0.33.0
+            // does indeed reset. Explicitly disabling it (for now, at least :shrug:)
+            PoolOpts::default()
+                .with_constraints(
+                    PoolConstraints::new(options.in_flight, options.in_flight).unwrap(),
+                )
+                .with_reset_connection(false),
+        );
+    let s = MysqlTrawlerBuilder {
+        opts,
+        variant: options.queries,
+    };
 
     wl.run(s, options.prime);
     Ok(())
