@@ -94,7 +94,6 @@ impl Service<bool> for MysqlTrawlerBuilder {
                         current_q.push(' ');
                     }
                     current_q.push_str(line);
-                    println!("NEXT DML: {:?}", &current_q);
                     if current_q.ends_with(';') {
                         c.query_drop(&current_q).await?;
                         current_q.clear();
@@ -351,7 +350,7 @@ fn main() -> Result<(), Error> {
                 .with_constraints(
                     PoolConstraints::new(options.in_flight, options.in_flight).unwrap(),
                 )
-                .with_reset_connection(false),
+                .with_reset_connection(true),
         );
     let s = MysqlTrawlerBuilder {
         opts,
