@@ -24,7 +24,7 @@ where
     let mut story = c
         .exec_iter(stmt, (::std::str::from_utf8(&id[..]).unwrap(),))
         .await?
-        .collect_and_drop::<my::Row>()
+        .collect_and_drop::<Row>()
         .await?;
     let story = story.swap_remove(0);
     let author = story.get::<u32, _>("user_id").unwrap();
@@ -82,12 +82,11 @@ where
 
     let comments = c
         .prep(
-            "SELECT `comments`.*, \
-             `comments`.`upvotes` - `comments`.`downvotes` AS saldo \
+            "SELECT `comments`.* \
              FROM `comments` \
              WHERE `comments`.`story_id` = ? \
              ORDER BY \
-             saldo ASC, \
+             (CAST(upvotes AS signed) - CAST(downvotes AS signed)) < 0 ASC, \
              confidence DESC",
         )
         .await?;

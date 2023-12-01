@@ -9,11 +9,12 @@ pub(crate) mod submit;
 pub(crate) mod user;
 
 use mysql_async::prelude::*;
+use mysql_async::{Conn, Error};
 
 pub(crate) async fn notifications(
-    mut c: my::Conn,
+    mut c: Conn,
     uid: u32,
-) -> Result<my::Conn, mysql_async::Error> {
+) -> Result<Conn, Error> {
     c.exec_drop(
         "SELECT BOUNDARY_notifications.notifications
       FROM BOUNDARY_notifications

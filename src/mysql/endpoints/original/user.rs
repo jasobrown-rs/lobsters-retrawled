@@ -1,5 +1,5 @@
 use mysql_async::prelude::*;
-use mysql_async::{Error, Row};
+use mysql_async::{Conn, Error, Row};
 use std::future::Future;
 use trawler::UserId;
 
@@ -7,9 +7,9 @@ pub(crate) async fn handle<F>(
     c: F,
     _acting_as: Option<UserId>,
     uid: UserId,
-) -> Result<(my::Conn, bool), Error>
+) -> Result<(Conn, bool), Error>
 where
-    F: 'static + Future<Output = Result<my::Conn, Error>> + Send,
+    F: 'static + Future<Output = Result<Conn, Error>> + Send,
 {
     let mut c = c.await?;
     let user = c
@@ -27,31 +27,17 @@ where
     };
 
     // most popular tag
-    let mut rows = c
-        .exec_iter(
-            "SELECT  `tags`.`id`, COUNT(*) AS `count` FROM `taggings` \
-             INNER JOIN `tags` ON `taggings`.`tag_id` = `tags`.`id` \
+    c.exec_drop(
+        "SELECT  `tags`.* FROM `tags` \
+             INNER JOIN `taggings` ON `taggings`.`tag_id` = `tags`.`id` \
              INNER JOIN `stories` ON `stories`.`id` = `taggings`.`story_id` \
              WHERE `tags`.`inactive` = 0 \
              AND `stories`.`user_id` = ? \
              GROUP BY `tags`.`id` \
-             ORDER BY `count` desc LIMIT 1",
-            (uid,),
-        )
-        .await?
-        .collect_and_drop::<my::Row>()
-        .await?;
-
-    if !rows.is_empty() {
-        let tag = rows.swap_remove(0);
-        c.exec_drop(
-            "SELECT  `tags`.* \
-                 FROM `tags` \
-                 WHERE `tags`.`id` = ?",
-            (tag.get::<u32, _>("id").unwrap(),),
-        )
-        .await?;
-    }
+             ORDER BY COUNT(*) desc LIMIT 1",
+        (uid,),
+    )
+    .await?;
 
     c.exec_drop(
         "SELECT  `keystores`.* \
