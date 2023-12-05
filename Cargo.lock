@@ -1714,6 +1714,7 @@ version = "0.2.6"
 source = "git+https://github.com/readysettech/rust-postgres.git#d4f90aa530783a0c7aaa6c5dba3841561061a0fe"
 dependencies = [
  "bytes",
+ "chrono",
  "fallible-iterator",
  "postgres-protocol 0.6.6 (git+https://github.com/readysettech/rust-postgres.git)",
 ]

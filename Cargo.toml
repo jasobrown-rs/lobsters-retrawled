@@ -20,7 +20,7 @@ postgres = {  git = "https://github.com/readysettech/rust-postgres.git"}
 postgres-native-tls = {  git = "https://github.com/readysettech/rust-postgres.git"}
 postgres-protocol = {  git = "https://github.com/readysettech/rust-postgres.git"}
 postgres-types = {  git = "https://github.com/readysettech/rust-postgres.git"}
-tokio-postgres = {  git = "https://github.com/readysettech/rust-postgres.git"}
+tokio-postgres = {  git = "https://github.com/readysettech/rust-postgres.git", features = ["runtime", "with-chrono-0_4"]}
 
 deadpool = "0.10"
 deadpool-postgres = "0.11"
