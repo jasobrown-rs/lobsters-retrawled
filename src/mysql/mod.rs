@@ -1,5 +1,5 @@
 use mysql_async::prelude::*;
-use mysql_async::{Conn, Opts, OptsBuilder, Pool, PoolConstraints, PoolOpts, Row};
+use mysql_async::{Conn, Error, Opts, OptsBuilder, Pool, PoolConstraints, PoolOpts, Row};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -25,7 +25,7 @@ pub struct MysqlTrawlerBuilder {
 }
 
 impl MysqlTrawlerBuilder {
-    pub fn build(options: &Options) -> Result<Self> {
+    pub fn build(options: &Options) -> Result<Self, Error> {
         // check that we can indeed connect
         let opts = OptsBuilder::from_opts(Opts::from_url(options.dbn.as_str())?)
             .tcp_nodelay(true)
@@ -117,7 +117,7 @@ impl Service<bool> for MysqlTrawlerBuilder {
     }
 }
 
-struct MysqlTrawler {
+pub struct MysqlTrawler {
     c: Pool,
     next_conn: MaybeConn,
     variant: Variant,

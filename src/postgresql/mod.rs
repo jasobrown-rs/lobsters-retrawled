@@ -1,9 +1,15 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::task::{Context, Poll};
+
+use deadpool_postgres::tokio_postgres::{Config, NoTls};
+use deadpool_postgres::{Client, Manager, ManagerConfig, Pool, RecyclingMethod};
+use tokio_postgres::Row;
 use tower_service::Service;
 use trawler::{LobstersRequest, TrawlerRequest};
 
+use crate::error::{Error, Result};
 use crate::{Options, Variant};
 mod endpoints;
 
@@ -12,29 +18,31 @@ const ORIGINAL_SCHEMA: &str = include_str!("db-schema/original.sql");
 //const NATURAL_SCHEMA: &str = include_str!("db-schema/natural.sql");
 
 pub struct PostgreSqlTrawlerBuilder {
-    //    opts: OptsBuilder,
-    variant: Variant,
+    options: Options,
 }
 
 impl PostgreSqlTrawlerBuilder {
-    pub fn build(options: &Options) -> Result<Self> {
-        // // check that we can indeed connect
-        // let opts = OptsBuilder::from_opts(Opts::from_url(options.dbn.as_str())?)
-        //     .tcp_nodelay(true)
-        //     .pool_opts(
-        //         // Note: version 0.23.0 of the mysql-async driver did not automatically
-        //         // reset the connection when it went back into the pool. version 0.33.0
-        //         // does indeed reset. Explicitly disabling it (for now, at least :shrug:)
-        //         PoolOpts::default()
-        //             .with_constraints(
-        //                 PoolConstraints::new(options.in_flight, options.in_flight).unwrap(),
-        //             )
-        //             .with_reset_connection(true),
-        //     );
-        Ok(PostgreSqlTrawlerBuilder {
-            //            opts,
-            variant: options.queries,
-        })
+    pub fn new(options: Options) -> Self {
+        Self { options }
+    }
+
+    fn build_pool(&self) -> Result<Pool, Error> {
+        Self::build_pool_from_config(&self.options, None)
+    }
+
+    fn build_pool_from_config(options: &Options, db_name: Option<&str>) -> Result<Pool, Error> {
+        let mut config = Config::from_str(&options.dbn)?;
+        if let Some(override_name) = db_name {
+            config.dbname(override_name);
+        }
+        let mgr_config = ManagerConfig {
+            // NOTE: mysql_async pooling, by default, will clear out everything from
+            // the connection (esp. prepared statements) when returning to pool.
+            //`RecyclingMethod` looks  heavyweight than that, so YMMV.
+            recycling_method: RecyclingMethod::Fast,
+        };
+        let mgr = Manager::from_config(config, NoTls, mgr_config);
+        Ok(Pool::builder(mgr).max_size(options.in_flight).build()?)
     }
 }
 
@@ -48,33 +56,33 @@ impl Service<bool> for PostgreSqlTrawlerBuilder {
     }
 
     fn call(&mut self, priming: bool) -> Self::Future {
-        let orig_opts = self.opts.clone();
-        let variant = self.variant;
+        let variant = self.options.queries;
+        let ret_pool = self.build_pool().unwrap();
 
         if priming {
-            // we need a special conn for setup
-            let opts: OptsBuilder = self
-                .opts
-                .clone()
-                .pool_opts(
-                    PoolOpts::default().with_constraints(PoolConstraints::new(1, 1).unwrap()),
-                )
-                .db_name(None::<String>)
-                .prefer_socket(false);
+            // we need a special conn for setup. the base MySQL code only used a
+            // single connection for the priming, so naively replicating that here :shrug:
+            let mut opts = self.options.clone();
+            opts.in_flight = 1;
+            let pool = Self::build_pool_from_config(&opts, Some("postgres")).unwrap();
 
-            let db: String = Opts::from(self.opts.clone()).db_name().unwrap().to_string();
+            let db: String = Config::from_str(&self.options.dbn)
+                .unwrap()
+                .get_dbname()
+                .expect("must have a database name defined")
+                .to_string();
+
             let db_drop = format!("DROP DATABASE IF EXISTS {}", db);
             let db_create = format!("CREATE DATABASE {}", db);
             let db_use = format!("USE {}", db);
             Box::pin(async move {
-                let mut c = Conn::new(opts).await?;
-                c.query_drop(&db_drop).await?;
-                c.query_drop(&db_create).await?;
-                c.query_drop(&db_use).await?;
+                let c = pool.get().await?;
+                c.simple_query(&db_drop).await?;
+                c.simple_query(&db_create).await?;
+                c.simple_query(&db_use).await?;
                 let schema = match variant {
                     Variant::Original => ORIGINAL_SCHEMA,
-                    Variant::Noria => NORIA_SCHEMA,
-                    //                    Variant::Natural => NATURAL_SCHEMA,
+                    _ => unimplemented!(),
                 };
                 let mut current_q = String::new();
                 for line in schema.lines() {
@@ -86,22 +94,20 @@ impl Service<bool> for PostgreSqlTrawlerBuilder {
                     }
                     current_q.push_str(line);
                     if current_q.ends_with(';') {
-                        c.query_drop(&current_q).await?;
+                        c.simple_query(&current_q).await?;
                         current_q.clear();
                     }
                 }
 
-                Ok(MysqlTrawler {
-                    c: Pool::new(orig_opts.clone()),
-                    next_conn: MaybeConn::None,
+                Ok(PostgreSqlTrawler {
+                    pool: ret_pool,
                     variant,
                 })
             })
         } else {
             Box::pin(async move {
-                Ok(MysqlTrawler {
-                    c: Pool::new(orig_opts.clone()),
-                    next_conn: MaybeConn::None,
+                Ok(PostgreSqlTrawler {
+                    pool: ret_pool,
                     variant,
                 })
             })
@@ -109,35 +115,18 @@ impl Service<bool> for PostgreSqlTrawlerBuilder {
     }
 }
 
-struct PostgreSqlTrawler {
-    //    c: Pool,
-    next_conn: MaybeConn,
+pub struct PostgreSqlTrawler {
+    pool: Pool,
     variant: Variant,
 }
 
 impl Service<TrawlerRequest> for PostgreSqlTrawler {
     type Response = ();
-    type Error = mysql_async::Error;
+    type Error = Error;
     type Future = impl Future<Output = Result<Self::Response, Self::Error>> + Send;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        loop {
-            match self.next_conn {
-                MaybeConn::None => {
-                    self.next_conn = MaybeConn::Pending(self.c.get_conn());
-                }
-                MaybeConn::Pending(ref mut getconn) => {
-                    if let Poll::Ready(conn) = Pin::new(getconn).poll(cx)? {
-                        self.next_conn = MaybeConn::Ready(conn);
-                    } else {
-                        return Poll::Pending;
-                    }
-                }
-                MaybeConn::Ready(_) => {
-                    return Poll::Ready(Ok(()));
-                }
-            }
-        }
+        Poll::Ready(Ok(()))
     }
 
     fn call(
@@ -149,136 +138,103 @@ impl Service<TrawlerRequest> for PostgreSqlTrawler {
             ..
         }: TrawlerRequest,
     ) -> Self::Future {
-        let c = match std::mem::replace(&mut self.next_conn, MaybeConn::None) {
-            MaybeConn::None | MaybeConn::Pending(_) => {
-                unreachable!("call called without poll_ready")
-            }
-            MaybeConn::Ready(c) => c,
-        };
-        let c = futures_util::future::ready(Ok(c));
-
-        // TODO: traffic management
-        // https://github.com/lobsters/lobsters/blob/master/app/controllers/application_controller.rb#L37
-        /*
-        let c = c.and_then(|c| {
-            c.start_transaction(my::TransactionOptions::new())
-                .and_then(|t| {
-                    t.drop_query(
-                        "SELECT keystores.* FROM keystores \
-                         WHERE keystores.key = 'traffic:date' FOR UPDATE",
-                    )
-                })
-                .and_then(|t| {
-                    t.drop_query(
-                        "SELECT keystores.* FROM keystores \
-                         WHERE keystores.key = 'traffic:hits' FOR UPDATE",
-                    )
-                })
-                .and_then(|t| {
-                    t.drop_query(
-                        "UPDATE keystores SET value = 100 \
-                         WHERE keystores.key = 'traffic:hits'",
-                    )
-                })
-                .and_then(|t| {
-                    t.drop_query(
-                        "UPDATE keystores SET value = 1521590012 \
-                         WHERE keystores.key = 'traffic:date'",
-                    )
-                })
-                .and_then(|t| t.commit())
-        });
-        */
-
-        macro_rules! handle_req {
-            ($module:tt, $req:expr) => {{
-                match req {
-                    LobstersRequest::User(uid) => {
-                        endpoints::$module::user::handle(c, acting_as, uid).await
-                    }
-                    LobstersRequest::Frontpage => {
-                        endpoints::$module::frontpage::handle(c, acting_as).await
-                    }
-                    LobstersRequest::Comments => {
-                        endpoints::$module::comments::handle(c, acting_as).await
-                    }
-                    LobstersRequest::Recent => {
-                        endpoints::$module::recent::handle(c, acting_as).await
-                    }
-                    LobstersRequest::Login => {
-                        let mut c = c.await?;
-                        let user = c
-                            .exec_first::<Row, _, _>(
-                                "SELECT 1 as one FROM `users` WHERE `users`.`username` = ?",
-                                (format!("user{}", acting_as.unwrap()),),
-                            )
-                            .await?;
-
-                        if user.is_none() {
-                            let uid = acting_as.unwrap();
-                            c.exec_drop(
-                                "INSERT INTO `users` (`username`) VALUES (?)",
-                                (format!("user{}", uid),),
-                            )
-                            .await?;
-                        }
-
-                        Ok((c, false))
-                    }
-                    LobstersRequest::Logout => Ok((c.await?, false)),
-                    LobstersRequest::Story(id) => {
-                        endpoints::$module::story::handle(c, acting_as, id).await
-                    }
-                    LobstersRequest::StoryVote(story, v) => {
-                        endpoints::$module::story_vote::handle(c, acting_as, story, v).await
-                    }
-                    LobstersRequest::CommentVote(comment, v) => {
-                        endpoints::$module::comment_vote::handle(c, acting_as, comment, v).await
-                    }
-                    LobstersRequest::Submit { id, title } => {
-                        endpoints::$module::submit::handle(c, acting_as, id, title, priming).await
-                    }
-                    LobstersRequest::Comment { id, story, parent } => {
-                        endpoints::$module::comment::handle(
-                            c, acting_as, id, story, parent, priming,
-                        )
-                        .await
-                    }
-                }
-            }};
-        }
-
         let variant = self.variant;
+        let pool = self.pool.clone();
+
         Box::pin(async move {
             let inner = async move {
+                macro_rules! handle_req {
+                    ($module:tt, $req:expr) => {{
+                        match req {
+                            LobstersRequest::User(uid) => {
+                                endpoints::$module::user::handle(pool, acting_as, uid).await
+                            }
+                            LobstersRequest::Frontpage => {
+                                endpoints::$module::frontpage::handle(pool, acting_as).await
+                            }
+                            LobstersRequest::Comments => {
+                                endpoints::$module::comments::handle(pool, acting_as).await
+                            }
+                            LobstersRequest::Recent => {
+                                endpoints::$module::recent::handle(pool, acting_as).await
+                            }
+                            LobstersRequest::Login => {
+                                let c = pool.get().await?;
+                                let user = c
+                                    .query_opt(
+                                        "SELECT 1 as one FROM `users` WHERE `users`.`username` = $1",
+                                        &[&format!("user{}", acting_as.unwrap())],
+                                    )
+                                    .await?;
+
+                                if user.is_none() {
+                                    let uid = acting_as.unwrap();
+                                    c.execute(
+                                        "INSERT INTO `users` (`username`) VALUES (?)",
+                                        &[&format!("user{}", uid),],
+                                    )
+                                    .await?;
+                                }
+
+                                Ok((c, false))
+                            }
+                            LobstersRequest::Logout => Ok((pool.get().await?, false)),
+                            LobstersRequest::Story(id) => {
+                                endpoints::$module::story::handle(pool, acting_as, id).await
+                            }
+                            LobstersRequest::StoryVote(story, v) => {
+                                endpoints::$module::story_vote::handle(pool, acting_as, story, v)
+                                    .await
+                            }
+                            LobstersRequest::CommentVote(comment, v) => {
+                                endpoints::$module::comment_vote::handle(
+                                    pool, acting_as, comment, v,
+                                )
+                                .await
+                            }
+                            LobstersRequest::Submit { id, title } => {
+                                endpoints::$module::submit::handle(
+                                    pool, acting_as, id, title, priming,
+                                )
+                                .await
+                            }
+                            LobstersRequest::Comment { id, story, parent } => {
+                                endpoints::$module::comment::handle(
+                                    pool, acting_as, id, story, parent, priming,
+                                )
+                                .await
+                            }
+                        }
+                    }};
+                }
+
                 let (c, with_notifications) = match variant {
                     Variant::Original => handle_req!(original, req),
-                    Variant::Noria => handle_req!(noria, req),
-                    //                    Variant::Natural => handle_req!(natural, req),
+                    _ => unimplemented!(),
                 }?;
 
-                // notifications
+                // // notifications
                 if let Some(uid) = acting_as {
                     if with_notifications && !priming {
-                        match variant {
+                        let res = match variant {
                             Variant::Original => endpoints::original::notifications(c, uid).await,
-                            Variant::Noria => endpoints::noria::notifications(c, uid).await,
-                            //                            Variant::Natural => endpoints::natural::notifications(c, uid).await,
+                            _ => unimplemented!(),
                         }?;
                     }
                 }
 
-                Ok(())
+                Ok::<(), Error>(())
             };
 
             // if the pool is disconnected, it just means that we exited while there were still
             // outstanding requests. that's fine.
             match inner.await {
                 Ok(())
-                | Err(mysql_async::Error::Driver(mysql_async::DriverError::PoolDisconnected)) => {
+                    // | Err(mysql_async::Error::Driver(mysql_async::DriverError::PoolDisconnected))
+                    => {
                     Ok(())
                 }
-                Err(e) => Err(e),
+                Err(e) => panic!("asdfas"),
             }
         })
     }
@@ -286,10 +242,9 @@ impl Service<TrawlerRequest> for PostgreSqlTrawler {
 
 impl trawler::AsyncShutdown for PostgreSqlTrawler {
     type Future = impl Future<Output = ()>;
-    fn shutdown(mut self) -> Self::Future {
-        let _ = std::mem::replace(&mut self.next_conn, MaybeConn::None);
+    fn shutdown(self) -> Self::Future {
         async move {
-            self.c.disconnect().await.unwrap();
+            self.pool.close();
         }
     }
 }

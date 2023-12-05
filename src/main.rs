@@ -1,8 +1,12 @@
 #![feature(type_alias_impl_trait, impl_trait_in_assoc_type)]
+#![allow(dead_code)]
+#![allow(unused_variables, unused_imports)]
 
+use crate::error::Error;
 use clap::{Parser, ValueEnum};
 use std::time;
 
+mod error;
 mod mysql;
 mod postgresql;
 
@@ -19,7 +23,7 @@ enum Variant {
     Natural,
 }
 
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, Parser)]
 pub(crate) struct Options {
     /// Reuest load scale factor for workload
     #[arg(long, default_value = "1.0")]
@@ -67,11 +71,16 @@ fn main() -> Result<(), Error> {
         wl.with_histogram(h.as_str());
     }
 
-    let s = match options.database {
-        Database::MySQL => mysql::MysqlTrawlerBuilder::build(&options)?,
-        Database::PostgreSQL => postgresql::PostgreSqlTrawlerBuilder::build(&options)?,
+    match options.database {
+        Database::MySQL => {
+            let s = mysql::MysqlTrawlerBuilder::build(&options)?;
+            wl.run(s, options.prime);
+        }
+        Database::PostgreSQL => {
+            let s = postgresql::PostgreSqlTrawlerBuilder::new(options.clone());
+            wl.run(s, options.prime);
+        }
     };
 
-    wl.run(s, options.prime);
     Ok(())
 }
