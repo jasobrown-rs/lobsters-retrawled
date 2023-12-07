@@ -9,6 +9,11 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.4", features =["derive"] }
 futures-core = "0.3.0"
 futures-util = "0.3.0"
+
+metrics = "0.21"
+metrics-util = "0.15"
+metrics-exporter-prometheus = "0.12"
+
 mysql_async = "0.33.0"
 mysql_common = { version = "0.31", features = ["chrono"] }
 tower-service = "0.3"

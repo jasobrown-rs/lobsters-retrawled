@@ -3,18 +3,26 @@
 extern crate mysql_async as my;
 
 use clap::{Parser, ValueEnum};
+use metrics::{register_histogram, Histogram};
+use metrics_exporter_prometheus::PrometheusBuilder;
 use mysql_async::prelude::*;
 use mysql_async::{Conn, Error, Opts, OptsBuilder, Pool, PoolConstraints, PoolOpts, Row};
+
+use std::collections::HashMap;
 use std::future::Future;
+use std::mem;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time;
+use std::time::{Duration, Instant};
 use tower_service::Service;
 use trawler::{LobstersRequest, TrawlerRequest};
 
 const ORIGINAL_SCHEMA: &str = include_str!("db-schema/original.sql");
 const NORIA_SCHEMA: &str = include_str!("db-schema/noria.sql");
-const NATURAL_SCHEMA: &str = include_str!("db-schema/natural.sql");
+// const NATURAL_SCHEMA: &str = include_str!("db-schema/natural.sql");
+
+const PUSH_GATEWAY_PUSH_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, ValueEnum)]
 enum Variant {
@@ -38,14 +46,9 @@ struct MysqlTrawler {
     c: Pool,
     next_conn: MaybeConn,
     variant: Variant,
+
+    pages_histos: HashMap<String, Histogram>,
 }
-/*
-impl Drop for MysqlTrawler {
-    fn drop(&mut self) {
-        self.c.disconnect();
-    }
-}
-*/
 
 mod endpoints;
 
@@ -53,9 +56,11 @@ impl Service<bool> for MysqlTrawlerBuilder {
     type Response = MysqlTrawler;
     type Error = mysql_async::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
     fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
+
     fn call(&mut self, priming: bool) -> Self::Future {
         let orig_opts = self.opts.clone();
         let variant = self.variant;
@@ -103,6 +108,7 @@ impl Service<bool> for MysqlTrawlerBuilder {
                 Ok(MysqlTrawler {
                     c: Pool::new(orig_opts.clone()),
                     next_conn: MaybeConn::None,
+                    pages_histos: HashMap::new(),
                     variant,
                 })
             })
@@ -111,6 +117,7 @@ impl Service<bool> for MysqlTrawlerBuilder {
                 Ok(MysqlTrawler {
                     c: Pool::new(orig_opts.clone()),
                     next_conn: MaybeConn::None,
+                    pages_histos: HashMap::new(),
                     variant,
                 })
             })
@@ -122,6 +129,7 @@ impl Service<TrawlerRequest> for MysqlTrawler {
     type Response = ();
     type Error = mysql_async::Error;
     type Future = impl Future<Output = Result<Self::Response, Self::Error>> + Send;
+
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         loop {
             match self.next_conn {
@@ -141,6 +149,7 @@ impl Service<TrawlerRequest> for MysqlTrawler {
             }
         }
     }
+
     fn call(
         &mut self,
         TrawlerRequest {
@@ -158,38 +167,16 @@ impl Service<TrawlerRequest> for MysqlTrawler {
         };
         let c = futures_util::future::ready(Ok(c));
 
-        // TODO: traffic management
-        // https://github.com/lobsters/lobsters/blob/master/app/controllers/application_controller.rb#L37
-        /*
-        let c = c.and_then(|c| {
-            c.start_transaction(my::TransactionOptions::new())
-                .and_then(|t| {
-                    t.drop_query(
-                        "SELECT keystores.* FROM keystores \
-                         WHERE keystores.key = 'traffic:date' FOR UPDATE",
-                    )
-                })
-                .and_then(|t| {
-                    t.drop_query(
-                        "SELECT keystores.* FROM keystores \
-                         WHERE keystores.key = 'traffic:hits' FOR UPDATE",
-                    )
-                })
-                .and_then(|t| {
-                    t.drop_query(
-                        "UPDATE keystores SET value = 100 \
-                         WHERE keystores.key = 'traffic:hits'",
-                    )
-                })
-                .and_then(|t| {
-                    t.drop_query(
-                        "UPDATE keystores SET value = 1521590012 \
-                         WHERE keystores.key = 'traffic:date'",
-                    )
-                })
-                .and_then(|t| t.commit())
-        });
-        */
+        // really?!? how can it be this hard to get a name from the page enum?
+        let page_name = LobstersRequest::variant_name(&mem::discriminant(&req)).to_string();
+        let histo = self
+            .pages_histos
+            .entry(page_name.clone())
+            .or_insert_with(|| {
+                let labels = vec![("page", page_name)];
+                register_histogram!("lobsters_page", &labels)
+            })
+            .clone();
 
         macro_rules! handle_req {
             ($module:tt, $req:expr) => {{
@@ -251,6 +238,9 @@ impl Service<TrawlerRequest> for MysqlTrawler {
 
         let variant = self.variant;
         Box::pin(async move {
+            // TODO start timestamp here ....
+            let timer = Instant::now();
+
             let inner = async move {
                 let (c, with_notifications) = match variant {
                     Variant::Original => handle_req!(original, req),
@@ -274,7 +264,9 @@ impl Service<TrawlerRequest> for MysqlTrawler {
 
             // if the pool is disconnected, it just means that we exited while there were still
             // outstanding requests. that's fine.
-            match inner.await {
+            let res = inner.await;
+            histo.record(timer.elapsed());
+            match res {
                 Ok(())
                 | Err(mysql_async::Error::Driver(mysql_async::DriverError::PoolDisconnected)) => {
                     Ok(())
@@ -325,14 +317,84 @@ struct Options {
     /// Database name (address)
     #[arg(long, default_value = "mysql://lobsters@localhost/soup")]
     dbn: String,
+
+    /// Enable reporting of metrics to prometheus.
+    ///
+    /// Note: defaulting to `true` basically makes this always true.
+    #[arg(long, default_value = "true")]
+    prometheus_metrics: bool,
+
+    /// Enable reporting of metrics to prometheus.
+    ///
+    /// Note: defaulting to `true` basically makes this always true.
+    #[arg(long)]
+    prometheus_push_gateway: Option<String>,
+}
+
+fn init_prometheus(options: &Options) {
+    // The scrape port for Prometheus - i.e., you want to load it in a browser.
+    // One port higher than what we use, by default, for
+    // in case you happen to run this benchmark on the same machine.
+    let scrape_port = 6035;
+    let socket = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), scrape_port);
+    println!("init: setting prometheus scrape endpoint to: {:?}", &socket);
+    let mut builder = PrometheusBuilder::new().with_http_listener(socket);
+
+    // Note: promethus can either host the scrape endpoint or push to the gateway,
+    // but not both.
+    if let Some(ref addr) = options.prometheus_push_gateway {
+        println!(
+            "init: send prometheus metrics to push gateway at: {}",
+            &addr
+        );
+        builder = builder
+            .with_push_gateway(addr, PUSH_GATEWAY_PUSH_INTERVAL, None, None)
+            .expect("failed to add push gateway");
+    }
+
+    builder
+        .install()
+        .expect("failed to install prometheus recorder/exporter");
+}
+
+/// A best-effort attempt to clean up metrics reporting. Normally, once this process exits,
+/// the last reported value for a metric that was pushed to the gateway will, essentially, remain
+/// that value until overwritten at a future execution. This sounds fine, but unforunately when
+/// graphing that data via grafana, the latency data values in the graphs will continue at the
+/// last recorded value forever (super annoying as it looks like a straight, unwaving line
+/// in perpetuity, even after the benchmarks is waaay done).
+///
+/// There's two solutions:
+/// 1. after the load test is done, sleep the main thread for 60 seconds. This will allow the
+/// windowed data in the histogram to clear out, and get reported by the background thread
+/// as record a value of 0 to the gateway.
+/// 2. after the load test is done, naively call the gateway to DELETE all the metrics for the job.
+/// As long as those values have been reported _at some point_ to prometheus, you have some workable data.
+///
+/// This implementation opts for the first, as it's easier to code as less jarring to prometheus, as the
+/// values are zero, not none - so it can always have a value to graph (avoids the "no data found" confusion).
+fn stop_prometheus() {
+    // this could probably be shorted, i didn't try that hard :shrug:
+    let sleep_time =
+        Duration::from_secs(60) + PUSH_GATEWAY_PUSH_INTERVAL + PUSH_GATEWAY_PUSH_INTERVAL;
+    println!(
+        "shutdown: waiting {} seconds until metrics gateway clears",
+        &sleep_time.as_secs()
+    );
+    std::thread::sleep(sleep_time);
 }
 
 fn main() -> Result<(), Error> {
     let options = Options::parse();
+    println!("launching lobsters benchmark, options: {:?}", &options);
+
+    if options.prometheus_metrics {
+        init_prometheus(&options);
+    }
 
     let mut wl = trawler::WorkloadBuilder::default();
     wl.scale(options.scale)
-        .time(time::Duration::from_secs(options.runtime))
+        .time(Duration::from_secs(options.runtime))
         .in_flight(options.in_flight);
 
     if let Some(ref h) = options.histogram {
@@ -350,7 +412,7 @@ fn main() -> Result<(), Error> {
                 .with_constraints(
                     PoolConstraints::new(options.in_flight, options.in_flight).unwrap(),
                 )
-                .with_reset_connection(true),
+                .with_reset_connection(false),
         );
     let s = MysqlTrawlerBuilder {
         opts,
@@ -358,5 +420,10 @@ fn main() -> Result<(), Error> {
     };
 
     wl.run(s, options.prime);
+
+    if options.prometheus_metrics {
+        stop_prometheus();
+    }
+
     Ok(())
 }
