@@ -55,18 +55,13 @@ where
 
     // NOTE: MySQL technically does everything inside this and_then in a transaction,
     // but let's be nice to it
-    let stmt = c
-        .prep(
+    let q = c
+        .exec_iter(
             "INSERT INTO `stories` \
              (`created_at`, `user_id`, `title`, \
              `description`, `short_id`, `upvotes`, `hotness`, \
              `markeddown_description`) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .await?;
-    let q = c
-        .exec_iter(
-            stmt,
             (
                 chrono::Local::now().naive_local(),
                 user,

@@ -14,15 +14,13 @@ where
 {
     let mut c = c.await?;
     let user = acting_as.unwrap();
-    let stmt = c
-        .prep(
+    let mut story = c
+        .exec_iter(
             "SELECT `stories`.* \
              FROM `stories` \
              WHERE `stories`.`short_id` = ?",
+            (::std::str::from_utf8(&story[..]).unwrap(),),
         )
-        .await?;
-    let mut story = c
-        .exec_iter(stmt, (::std::str::from_utf8(&story[..]).unwrap(),))
         .await?
         .collect_and_drop::<Row>()
         .await?;

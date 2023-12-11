@@ -51,14 +51,12 @@ where
         )
         .await?;
 
-        let stmt = c
-            .prep(
+        let tags = c
+            .exec_iter(
                 "SELECT `tag_filters`.* FROM `tag_filters` \
                  WHERE `tag_filters`.`user_id` = ?",
+                (uid,),
             )
-            .await?;
-        let tags = c
-            .exec_iter(stmt, (uid,))
             .await?
             .reduce_and_drop(Vec::new(), |mut tags, tag: Row| {
                 tags.push(tag.get::<u32, _>("tag_id").unwrap());

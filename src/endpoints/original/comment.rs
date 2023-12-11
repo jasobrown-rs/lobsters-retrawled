@@ -84,18 +84,13 @@ where
     // but let's be nice to it
     let now = chrono::Local::now().naive_local();
     let q = if let Some((parent, thread)) = parent {
-        let stmt = c
-            .prep(
-                "INSERT INTO `comments` \
+        c.exec_iter(
+            "INSERT INTO `comments` \
              (`created_at`, `updated_at`, `short_id`, `story_id`, \
              `user_id`, `parent_comment_id`, `thread_id`, \
              `comment`, `upvotes`, `confidence`, \
              `markeddown_comment`) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            )
-            .await?;
-        c.exec_iter(
-            stmt,
             (
                 now,
                 now,
@@ -112,17 +107,12 @@ where
         )
         .await?
     } else {
-        let stmt = c
-            .prep(
-                "INSERT INTO `comments` \
+        c.exec_iter(
+            "INSERT INTO `comments` \
              (`created_at`, `updated_at`, `short_id`, `story_id`, \
              `user_id`, `comment`, `upvotes`, `confidence`, \
              `markeddown_comment`) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            )
-            .await?;
-        c.exec_iter(
-            stmt,
             (
                 now,
                 now,
@@ -169,8 +159,8 @@ where
     .await?;
 
     // why are these ordered?
-    let stmt = c
-        .prep(
+    let count = c
+        .exec_iter(
             "SELECT `comments`.*, \
              `comments`.`upvotes` - `comments`.`downvotes` AS saldo \
              FROM `comments` \
@@ -178,10 +168,8 @@ where
              ORDER BY \
              saldo ASC, \
              confidence DESC",
+            (story,),
         )
-        .await?;
-    let count = c
-        .exec_iter(stmt, (story,))
         .await?
         .reduce_and_drop(0, |rows, _: Row| rows + 1)
         .await?;
