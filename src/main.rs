@@ -83,9 +83,7 @@ impl RequestProcessor for MysqlTrawler {
         let opts: OptsBuilder = self
             .opts
             .clone()
-            .pool_opts(
-                PoolOpts::default().with_constraints(PoolConstraints::new(1, 1).unwrap()),
-            )
+            .pool_opts(PoolOpts::default().with_constraints(PoolConstraints::new(1, 1).unwrap()))
             .db_name(None::<String>)
             .prefer_socket(false);
 
@@ -119,7 +117,7 @@ impl RequestProcessor for MysqlTrawler {
 
         Ok(())
     }
-    
+
     async fn process(
         &mut self,
         TrawlerRequest {
@@ -131,7 +129,7 @@ impl RequestProcessor for MysqlTrawler {
     ) -> Result<()> {
         if self.pool.is_none() {
             // a closed pool was acceptable under earlier iterations of this app ...
-            return Ok(())
+            return Ok(());
         }
         let c = self.pool.as_mut().expect("asdf").get_conn(); // just checked
 
@@ -329,7 +327,7 @@ fn main() -> Result<()> {
     let options = Options::parse();
     println!("launching lobsters benchmark, options: {:?}", &options);
 
-    if options.prometheus_metrics  {
+    if options.prometheus_metrics {
         init_prometheus(&options);
     }
 
@@ -341,7 +339,6 @@ fn main() -> Result<()> {
     if let Some(ref h) = options.histogram {
         wl.with_histogram(h.clone());
     }
-
 
     let mysql_trawler = MysqlTrawler::new(options.clone())?;
     wl.run(mysql_trawler, options.prime);

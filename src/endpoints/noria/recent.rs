@@ -53,9 +53,9 @@ where
         .await?;
 
         c.exec_drop(
-                "SELECT `tag_filters`.* FROM `tag_filters` \
+            "SELECT `tag_filters`.* FROM `tag_filters` \
                  WHERE `tag_filters`.`user_id` = ?",
-                (uid,),
+            (uid,),
         )
         .await?;
 
