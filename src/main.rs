@@ -226,7 +226,7 @@ impl RequestProcessor for MysqlTrawler {
 
 #[derive(Clone, Debug, Parser)]
 struct Options {
-    /// Reuest load scale factor for workload
+    /// Request load scale factor for workload
     #[arg(long, default_value = "1.0")]
     scale: f64,
 
@@ -239,7 +239,7 @@ struct Options {
     prime: bool,
 
     /// Which set of queries to run
-    #[arg(long, default_value = "original")]
+    #[arg(long, default_value = "noria")]
     queries: Variant,
 
     /// Benchmark runtime in seconds
@@ -261,9 +261,7 @@ struct Options {
     #[arg(long, default_value = "true")]
     prometheus_metrics: bool,
 
-    /// Enable reporting of metrics to prometheus.
-    ///
-    /// Note: defaulting to `true` basically makes this always true.
+    /// Address of a Prometheus push gate way to send metrics to. 
     #[arg(long)]
     prometheus_push_gateway: Option<String>,
 }
@@ -288,7 +286,6 @@ fn init_prometheus(options: &Options) {
             .with_push_gateway(addr, PUSH_GATEWAY_PUSH_INTERVAL, None, None)
             .expect("failed to add push gateway");
     }
-
     builder
         .install()
         .expect("failed to install prometheus recorder/exporter");
