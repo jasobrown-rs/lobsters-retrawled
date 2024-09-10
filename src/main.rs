@@ -305,10 +305,10 @@ fn init_prometheus(options: &Options) {
 ///
 /// There's two solutions:
 /// 1. after the load test is done, sleep the main thread for 60 seconds. This will allow the
-/// windowed data in the histogram to clear out, and get reported by the background thread
-/// as record a value of 0 to the gateway.
+///    windowed data in the histogram to clear out, and get reported by the background thread
+///    as record a value of 0 to the gateway.
 /// 2. after the load test is done, naively call the gateway to DELETE all the metrics for the job.
-/// As long as those values have been reported _at some point_ to prometheus, you have some workable data.
+///    As long as those values have been reported _at some point_ to prometheus, you have some workable data.
 ///
 /// This implementation opts for the first, as it's easier to code as less jarring to prometheus, as the
 /// values are zero, not none - so it can always have a value to graph (avoids the "no data found" confusion).

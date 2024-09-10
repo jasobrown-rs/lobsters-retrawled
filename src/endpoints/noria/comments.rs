@@ -38,7 +38,7 @@ where
             .chain(stories.iter().map(|c| c as &_))
             .collect();
         c.exec_drop(
-            &format!(
+            format!(
                 "SELECT 1 FROM hidden_stories \
                      WHERE user_id = ? \
                      AND hidden_stories.story_id IN ({})",
@@ -54,7 +54,7 @@ where
         .map(|id| format!("{}", id))
         .collect::<Vec<_>>()
         .join(",");
-    c.query_drop(&format!(
+    c.query_drop(format!(
         "SELECT `users`.* FROM `users` \
              WHERE `users`.`id` IN ({})",
         users
@@ -68,7 +68,7 @@ where
         .join(",");
 
     let authors = c
-        .query_iter(&format!(
+        .query_iter(format!(
             "SELECT  `stories`.* FROM `stories` \
              WHERE `stories`.`id` IN ({})",
             stories
@@ -87,7 +87,7 @@ where
             .collect();
 
         c.exec_drop(
-            &format!(
+            format!(
                 "SELECT `votes`.* FROM `votes` \
                      WHERE `votes`.`user_id` = ? \
                      AND `votes`.`comment_id` IN ({})",
@@ -105,7 +105,7 @@ where
         .collect::<Vec<_>>()
         .join(",");
 
-    c.query_drop(&format!(
+    c.query_drop(format!(
         "SELECT  `users`.* FROM `users` \
              WHERE `users`.`id` IN ({})",
         authors

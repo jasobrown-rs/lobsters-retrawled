@@ -63,7 +63,7 @@ where
     .await?;
 
     c.exec_drop(
-        &format!(
+        format!(
             "UPDATE `users` \
                  SET `users`.`karma` = `users`.`karma` {} \
                  WHERE `users`.`id` = ?",
@@ -112,7 +112,7 @@ where
     // upvote/downvote ratio thingy. See Story::calculated_hotness
     // in the lobsters source for details.
     c.exec_drop(
-        &format!(
+        format!(
             "UPDATE stories SET \
                  stories.upvotes = stories.upvotes {}, \
                  stories.downvotes = stories.downvotes {}, \

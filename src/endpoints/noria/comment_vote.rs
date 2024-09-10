@@ -63,7 +63,7 @@ where
     .await?;
 
     c.exec_drop(
-        &format!(
+        format!(
             "UPDATE `users` \
                  SET `users`.`karma` = `users`.`karma` {} \
                  WHERE `users`.`id` = ?",
@@ -79,7 +79,7 @@ where
     // approximate Comment::calculate_hotness
     let confidence = upvotes as f64 / (upvotes as f64 + downvotes as f64);
     c.exec_drop(
-        &format!(
+        format!(
             "UPDATE `comments` \
                  SET \
                  `comments`.`upvotes` = `comments`.`upvotes` {}, \
@@ -146,7 +146,7 @@ where
     // upvote/downvote ratio thingy. See Story::calculated_hotness
     // in the lobsters source for details.
     c.exec_drop(
-        &format!(
+        format!(
             "UPDATE stories SET \
                  stories.upvotes = stories.upvotes {}, \
                  stories.downvotes = stories.downvotes {}, \

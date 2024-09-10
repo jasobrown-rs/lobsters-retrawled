@@ -70,13 +70,13 @@ where
         .map(|id| format!("{}", id))
         .collect::<Vec<_>>()
         .join(",");
-    c.query_drop(&format!(
+    c.query_drop(format!(
         "SELECT `users`.* FROM `users` WHERE `users`.`id` IN ({})",
         users,
     ))
     .await?;
 
-    c.query_drop(&format!(
+    c.query_drop(format!(
         "SELECT `suggested_titles`.* \
              FROM `suggested_titles` \
              WHERE `suggested_titles`.`story_id` IN ({})",
@@ -84,7 +84,7 @@ where
     ))
     .await?;
 
-    c.query_drop(&format!(
+    c.query_drop(format!(
         "SELECT `suggested_taggings`.* \
              FROM `suggested_taggings` \
              WHERE `suggested_taggings`.`story_id` IN ({})",
@@ -110,7 +110,7 @@ where
         .map(|id| format!("{}", id))
         .collect::<Vec<_>>()
         .join(",");
-    c.query_drop(&format!(
+    c.query_drop(format!(
         "SELECT `tags`.* FROM `tags` WHERE `tags`.`id` IN ({})",
         tags
     ))
@@ -123,7 +123,7 @@ where
             .chain(stories.iter().map(|s| s as &_))
             .collect();
         c.exec_drop(
-            &format!(
+            format!(
                 "SELECT `votes`.* FROM `votes` \
                      WHERE `votes`.`user_id` = ? \
                      AND `votes`.`story_id` IN ({}) \
@@ -138,7 +138,7 @@ where
             .chain(stories.iter().map(|s| s as &_))
             .collect();
         c.exec_drop(
-            &format!(
+            format!(
                 "SELECT `hidden_stories`.* \
                      FROM `hidden_stories` \
                      WHERE `hidden_stories`.`user_id` = ? \
@@ -153,7 +153,7 @@ where
             .chain(stories.iter().map(|s| s as &_))
             .collect();
         c.exec_drop(
-            &format!(
+            format!(
                 "SELECT `saved_stories`.* \
                      FROM `saved_stories` \
                      WHERE `saved_stories`.`user_id` = ? \

@@ -105,7 +105,7 @@ where
         .map(|id| format!("{}", id))
         .collect::<Vec<_>>()
         .join(", ");
-    c.query_drop(&format!(
+    c.query_drop(format!(
         "SELECT `users`.* FROM `users` WHERE `users`.`id` IN ({})",
         users
     ))
@@ -118,7 +118,7 @@ where
         .map(|id| format!("{}", id))
         .collect::<Vec<_>>()
         .join(", ");
-    c.query_drop(&format!(
+    c.query_drop(format!(
         "SELECT `votes`.* FROM `votes` WHERE `votes`.`comment_id` IN ({})",
         comments
     ))
@@ -172,7 +172,7 @@ where
         .map(|id| format!("{}", id))
         .collect::<Vec<_>>()
         .join(", ");
-    c.query_drop(&format!(
+    c.query_drop(format!(
         "SELECT `tags`.* FROM `tags` WHERE `tags`.`id` IN ({})",
         tags
     ))
