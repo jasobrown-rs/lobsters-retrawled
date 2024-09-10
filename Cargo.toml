@@ -6,15 +6,15 @@ publish = false
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4.4", features =["derive"] }
+clap = { version = "4", features =["derive"] }
 futures-core = "0.3.0"
 futures-util = "0.3.0"
 
-metrics = "0.21"
-metrics-util = "0.15"
-metrics-exporter-prometheus = "0.12"
+metrics = "0.23"
+metrics-util = "0.17"
+metrics-exporter-prometheus = "0.15"
 
-mysql_async = "0.33.0"
-mysql_common = { version = "0.31", features = ["chrono"] }
-tower-service = "0.3"
-trawler = "0.11.0-alpha.7"
+mysql_async = "0.34"
+mysql_common = { version = "0.32", features = ["chrono"] }
+trawler = { git = "https://github.com/jasobrown-rs/trawler.git" }
+
