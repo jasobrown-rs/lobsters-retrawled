@@ -1336,6 +1336,8 @@ checksum = "78b3ae25bc7c8c38cec158d1f2757ee79e9b3740fbc7ccf0e59e4b08d793fa89"
 name = "lobsters-retrawled"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "chrono",
  "clap",
  "futures-core",
@@ -2863,7 +2865,7 @@ dependencies = [
 [[package]]
 name = "trawler"
 version = "0.12.0-alpha.1"
-source = "git+https://github.com/jasobrown-rs/trawler.git#3e3ada22e08007534e479b22e5a18b88430c1e00"
+source = "git+https://github.com/jasobrown-rs/trawler.git#6aeedf78bf9a2fa2a004aa1fe14cb5f822948289"
 dependencies = [
  "anyhow",
  "async-trait",

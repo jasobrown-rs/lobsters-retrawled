@@ -1,28 +1,28 @@
-#![feature(type_alias_impl_trait, impl_trait_in_assoc_type)]
+// #![feature(type_alias_impl_trait, impl_trait_in_assoc_type)]
 
 extern crate mysql_async as my;
 
+use anyhow::Result;
+use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
-use metrics::{register_histogram, Histogram};
+use metrics::{histogram, Histogram};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use mysql_async::prelude::*;
-use mysql_async::{Conn, Error, Opts, OptsBuilder, Pool, PoolConstraints, PoolOpts, Row};
+use mysql_async::{Conn, Opts, OptsBuilder, Pool, PoolConstraints, PoolOpts, Row};
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::pin::Pin;
-use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
-use tower_service::Service;
-use trawler::{LobstersRequest, TrawlerRequest};
+use trawler::{LobstersRequest, RequestProcessor, TrawlerRequest};
 
 const ORIGINAL_SCHEMA: &str = include_str!("db-schema/original.sql");
 const NORIA_SCHEMA: &str = include_str!("db-schema/noria.sql");
 // const NATURAL_SCHEMA: &str = include_str!("db-schema/natural.sql");
 
 const PUSH_GATEWAY_PUSH_INTERVAL: Duration = Duration::from_secs(5);
+
+mod endpoints;
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug, ValueEnum)]
 enum Variant {
@@ -31,126 +31,96 @@ enum Variant {
     //    Natural,
 }
 
-struct MysqlTrawlerBuilder {
-    opts: OptsBuilder,
-    variant: Variant,
-}
-
-enum MaybeConn {
-    None,
-    Pending(my::futures::GetConn),
-    Ready(Conn),
-}
-
+#[derive(Clone)]
 struct MysqlTrawler {
-    c: Pool,
-    next_conn: MaybeConn,
+    opts: OptsBuilder,
+    pool: Option<Pool>,
     variant: Variant,
-
     pages_histos: HashMap<String, Histogram>,
 }
 
-mod endpoints;
-
-impl Service<bool> for MysqlTrawlerBuilder {
-    type Response = MysqlTrawler;
-    type Error = mysql_async::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-    fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
+impl MysqlTrawler {
+    fn new(options: Options) -> Result<Self> {
+        // check that we can indeed connect
+        let opts = OptsBuilder::from_opts(Opts::from_url(options.dbn.as_str())?)
+            .tcp_nodelay(true)
+            .pool_opts(
+                // Note: version 0.23.0 of the mysql-async driver did not automatically
+                // reset the connection when it went back into the pool. version 0.33.0
+                // does indeed reset. Explicitly disabling it (for now, at least :shrug:)
+                PoolOpts::default()
+                    .with_constraints(
+                        PoolConstraints::new(options.in_flight, options.in_flight).unwrap(),
+                    )
+                    .with_reset_connection(false),
+            );
+        let pool = Pool::new(opts.clone());
+        Ok(Self {
+            opts,
+            pool: Some(pool),
+            variant: options.queries,
+            pages_histos: Default::default(),
+        })
     }
 
-    fn call(&mut self, priming: bool) -> Self::Future {
-        let orig_opts = self.opts.clone();
-        let variant = self.variant;
-
-        if priming {
-            // we need a special conn for setup
-            let opts: OptsBuilder = self
-                .opts
-                .clone()
-                .pool_opts(
-                    PoolOpts::default().with_constraints(PoolConstraints::new(1, 1).unwrap()),
-                )
-                .db_name(None::<String>)
-                .prefer_socket(false);
-
-            let db: String = Opts::from(self.opts.clone()).db_name().unwrap().to_string();
-            let db_drop = format!("DROP DATABASE IF EXISTS {}", db);
-            let db_create = format!("CREATE DATABASE {}", db);
-            let db_use = format!("USE {}", db);
-            Box::pin(async move {
-                let mut c = Conn::new(opts).await?;
-                c.query_drop(&db_drop).await?;
-                c.query_drop(&db_create).await?;
-                c.query_drop(&db_use).await?;
-                let schema = match variant {
-                    Variant::Original => ORIGINAL_SCHEMA,
-                    Variant::Noria => NORIA_SCHEMA,
-                    //                    Variant::Natural => NATURAL_SCHEMA,
-                };
-                let mut current_q = String::new();
-                for line in schema.lines() {
-                    if line.starts_with("--") || line.is_empty() {
-                        continue;
-                    }
-                    if !current_q.is_empty() {
-                        current_q.push(' ');
-                    }
-                    current_q.push_str(line);
-                    if current_q.ends_with(';') {
-                        c.query_drop(&current_q).await?;
-                        current_q.clear();
-                    }
-                }
-
-                Ok(MysqlTrawler {
-                    c: Pool::new(orig_opts.clone()),
-                    next_conn: MaybeConn::None,
-                    pages_histos: HashMap::new(),
-                    variant,
-                })
+    fn record_histo(&mut self, page_name: String, elaped: Duration) {
+        let histo = self
+            .pages_histos
+            .entry(page_name.clone())
+            .or_insert_with(|| {
+                let labels = vec![("page", page_name)];
+                histogram!("lobsters_page", &labels)
             })
-        } else {
-            Box::pin(async move {
-                Ok(MysqlTrawler {
-                    c: Pool::new(orig_opts.clone()),
-                    next_conn: MaybeConn::None,
-                    pages_histos: HashMap::new(),
-                    variant,
-                })
-            })
-        }
+            .clone();
+        histo.record(elaped);
     }
 }
 
-impl Service<TrawlerRequest> for MysqlTrawler {
-    type Response = ();
-    type Error = mysql_async::Error;
-    type Future = impl Future<Output = Result<Self::Response, Self::Error>> + Send;
+#[async_trait]
+impl RequestProcessor for MysqlTrawler {
+    async fn data_prime_init(&mut self) -> Result<()> {
+        // we need a special conn for setup
+        let opts: OptsBuilder = self
+            .opts
+            .clone()
+            .pool_opts(
+                PoolOpts::default().with_constraints(PoolConstraints::new(1, 1).unwrap()),
+            )
+            .db_name(None::<String>)
+            .prefer_socket(false);
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        loop {
-            match self.next_conn {
-                MaybeConn::None => {
-                    self.next_conn = MaybeConn::Pending(self.c.get_conn());
-                }
-                MaybeConn::Pending(ref mut getconn) => {
-                    if let Poll::Ready(conn) = Pin::new(getconn).poll(cx)? {
-                        self.next_conn = MaybeConn::Ready(conn);
-                    } else {
-                        return Poll::Pending;
-                    }
-                }
-                MaybeConn::Ready(_) => {
-                    return Poll::Ready(Ok(()));
-                }
+        let db: String = Opts::from(self.opts.clone()).db_name().unwrap().to_string();
+        let db_drop = format!("DROP DATABASE IF EXISTS {}", db);
+        let db_create = format!("CREATE DATABASE {}", db);
+        let db_use = format!("USE {}", db);
+        let mut c = Conn::new(opts).await?;
+        c.query_drop(&db_drop).await?;
+        c.query_drop(&db_create).await?;
+        c.query_drop(&db_use).await?;
+        let schema = match self.variant {
+            Variant::Original => ORIGINAL_SCHEMA,
+            Variant::Noria => NORIA_SCHEMA,
+            //                    Variant::Natural => NATURAL_SCHEMA,
+        };
+        let mut current_q = String::new();
+        for line in schema.lines() {
+            if line.starts_with("--") || line.is_empty() {
+                continue;
+            }
+            if !current_q.is_empty() {
+                current_q.push(' ');
+            }
+            current_q.push_str(line);
+            if current_q.ends_with(';') {
+                c.query_drop(&current_q).await?;
+                current_q.clear();
             }
         }
-    }
 
-    fn call(
+        Ok(())
+    }
+    
+    async fn process(
         &mut self,
         TrawlerRequest {
             user: acting_as,
@@ -158,25 +128,15 @@ impl Service<TrawlerRequest> for MysqlTrawler {
             is_priming: priming,
             ..
         }: TrawlerRequest,
-    ) -> Self::Future {
-        let c = match std::mem::replace(&mut self.next_conn, MaybeConn::None) {
-            MaybeConn::None | MaybeConn::Pending(_) => {
-                unreachable!("call called without poll_ready")
-            }
-            MaybeConn::Ready(c) => c,
-        };
-        let c = futures_util::future::ready(Ok(c));
+    ) -> Result<()> {
+        if self.pool.is_none() {
+            // a closed pool was acceptable under earlier iterations of this app ...
+            return Ok(())
+        }
+        let c = self.pool.as_mut().expect("asdf").get_conn(); // just checked
 
         // really?!? how can it be this hard to get a name from the page enum?
         let page_name = LobstersRequest::variant_name(&mem::discriminant(&req)).to_string();
-        let histo = self
-            .pages_histos
-            .entry(page_name.clone())
-            .or_insert_with(|| {
-                let labels = vec![("page", page_name)];
-                register_histogram!("lobsters_page", &labels)
-            })
-            .clone();
 
         macro_rules! handle_req {
             ($module:tt, $req:expr) => {{
@@ -236,58 +196,39 @@ impl Service<TrawlerRequest> for MysqlTrawler {
             }};
         }
 
+        let timer = Instant::now();
         let variant = self.variant;
-        Box::pin(async move {
-            // TODO start timestamp here ....
-            let timer = Instant::now();
 
-            let inner = async move {
-                let (c, with_notifications) = match variant {
-                    Variant::Original => handle_req!(original, req),
-                    Variant::Noria => handle_req!(noria, req),
-                    //                    Variant::Natural => handle_req!(natural, req),
+        let (c, with_notifications) = match variant {
+            Variant::Original => handle_req!(original, req),
+            Variant::Noria => handle_req!(noria, req),
+            // Variant::Natural => handle_req!(natural, req),
+        }?;
+
+        // notifications
+        if let Some(uid) = acting_as {
+            if with_notifications && !priming {
+                match variant {
+                    Variant::Original => endpoints::original::notifications(c, uid).await,
+                    Variant::Noria => endpoints::noria::notifications(c, uid).await,
+                    // Variant::Natural => endpoints::natural::notifications(c, uid).await,
                 }?;
-
-                // notifications
-                if let Some(uid) = acting_as {
-                    if with_notifications && !priming {
-                        match variant {
-                            Variant::Original => endpoints::original::notifications(c, uid).await,
-                            Variant::Noria => endpoints::noria::notifications(c, uid).await,
-                            //                            Variant::Natural => endpoints::natural::notifications(c, uid).await,
-                        }?;
-                    }
-                }
-
-                Ok(())
-            };
-
-            // if the pool is disconnected, it just means that we exited while there were still
-            // outstanding requests. that's fine.
-            let res = inner.await;
-            histo.record(timer.elapsed());
-            match res {
-                Ok(())
-                | Err(mysql_async::Error::Driver(mysql_async::DriverError::PoolDisconnected)) => {
-                    Ok(())
-                }
-                Err(e) => Err(e),
             }
-        })
-    }
-}
+        };
 
-impl trawler::AsyncShutdown for MysqlTrawler {
-    type Future = impl Future<Output = ()>;
-    fn shutdown(mut self) -> Self::Future {
-        let _ = std::mem::replace(&mut self.next_conn, MaybeConn::None);
-        async move {
-            self.c.disconnect().await.unwrap();
+        self.record_histo(page_name, timer.elapsed());
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<()> {
+        if let Some(pool) = self.pool.take() {
+            pool.disconnect().await?
         }
+        Ok(())
     }
 }
 
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, Parser)]
 struct Options {
     /// Reuest load scale factor for workload
     #[arg(long, default_value = "1.0")]
@@ -384,11 +325,11 @@ fn stop_prometheus() {
     std::thread::sleep(sleep_time);
 }
 
-fn main() -> Result<(), Error> {
+fn main() -> Result<()> {
     let options = Options::parse();
     println!("launching lobsters benchmark, options: {:?}", &options);
 
-    if options.prometheus_metrics {
+    if options.prometheus_metrics  {
         init_prometheus(&options);
     }
 
@@ -398,28 +339,12 @@ fn main() -> Result<(), Error> {
         .in_flight(options.in_flight);
 
     if let Some(ref h) = options.histogram {
-        wl.with_histogram(h.as_str());
+        wl.with_histogram(h.clone());
     }
 
-    // check that we can indeed connect
-    let opts = OptsBuilder::from_opts(Opts::from_url(options.dbn.as_str())?)
-        .tcp_nodelay(true)
-        .pool_opts(
-            // Note: version 0.23.0 of the mysql-async driver did not automatically
-            // reset the connection when it went back into the pool. version 0.33.0
-            // does indeed reset. Explicitly disabling it (for now, at least :shrug:)
-            PoolOpts::default()
-                .with_constraints(
-                    PoolConstraints::new(options.in_flight, options.in_flight).unwrap(),
-                )
-                .with_reset_connection(false),
-        );
-    let s = MysqlTrawlerBuilder {
-        opts,
-        variant: options.queries,
-    };
 
-    wl.run(s, options.prime);
+    let mysql_trawler = MysqlTrawler::new(options.clone())?;
+    wl.run(mysql_trawler, options.prime);
 
     if options.prometheus_metrics {
         stop_prometheus();
