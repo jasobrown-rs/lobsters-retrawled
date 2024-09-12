@@ -96,7 +96,7 @@ impl RequestProcessor for MysqlTrawler {
         let schema = match self.variant {
             Variant::Original => ORIGINAL_SCHEMA,
             Variant::Noria => NORIA_SCHEMA,
-            //                    Variant::Natural => NATURAL_SCHEMA,
+            // Variant::Natural => NATURAL_SCHEMA,
         };
         let mut current_q = String::new();
         for line in schema.lines() {
@@ -129,7 +129,7 @@ impl RequestProcessor for MysqlTrawler {
             // a closed pool was acceptable under earlier iterations of this app ...
             return Ok(());
         }
-        let c = self.pool.as_mut().expect("asdf").get_conn(); // just checked
+        let c = self.pool.as_mut().expect("must have pool").get_conn(); // just checked
 
         // really?!? how can it be this hard to get a name from the page enum?
         let page_name = LobstersRequest::variant_name(&mem::discriminant(&req)).to_string();

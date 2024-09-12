@@ -1,6 +1,6 @@
 [package]
-name = "lobsters-retrawled"
-version = "0.1.0"
+name = "lobsters"
+version = "0.2.0"
 edition = "2021"
 publish = false
 
@@ -19,4 +19,3 @@ metrics-exporter-prometheus = "0.15"
 mysql_async = "0.34"
 mysql_common = { version = "0.32", features = ["chrono"] }
 trawler = { git = "https://github.com/jasobrown-rs/trawler.git" }
-

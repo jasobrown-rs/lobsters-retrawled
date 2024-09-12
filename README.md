@@ -53,6 +53,27 @@ There's an example shell script of how to orchestrate an end-to-end run which co
 At the end of each run, the benchmark will emit per-page metrics. For example:
 
 *jasobrown to fill this in*
+```
+# op        	metric      	pct	µs
+Frontpage   	processing  	50	11439
+Frontpage   	processing  	95	18655
+Frontpage   	processing  	99	18655
+Frontpage   	processing  	100	18655
+Frontpage   	sojourn     	50	11599
+Frontpage   	sojourn     	95	18847
+Frontpage   	sojourn     	99	18847
+Frontpage   	sojourn     	100	18847
+User        	processing  	50	6715
+User        	processing  	95	6715
+User        	processing  	99	6715
+User        	processing  	100	6715
+User        	sojourn     	50	6867
+User        	sojourn     	95	6867
+User        	sojourn     	99	6867
+User        	sojourn     	100	6867
+...
+```
+
 
 Alternatively, there is a sample (read: naive) [grafana dashboard](./dashboards/lobsters.json) in this repo you can use a point of departure for graphing the counts and latency histograms.
 
