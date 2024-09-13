@@ -71,7 +71,7 @@ run_benchmark() {
 
     local prometheus=""
     if [ ! -z "$push_gateway_url" ]; then
-        prometheus="----prometheus-push-gateway ${push_gateway_url}"
+        prometheus="--prometheus-push-gateway ${push_gateway_url}"
     fi
 
     $driver_bin $prime --dbn $url \
@@ -79,7 +79,8 @@ run_benchmark() {
                 --scale ${scale} \
                 --in-flight ${in_flight} \
                 --queries ${queries} \
-                > $log_dir/driver_out.log
+                ${prometheus} \
+                > $log_file
 
     if [ $? -ne 0 ]; then
         echo "**** The benchmark failed. ****"
@@ -97,7 +98,7 @@ cache_queries() {
     eval "$proxied_queries" > /tmp/rs-queries.txt
 
     # pick out the query_ids of the supported queries
-    grep -i select /tmp/rs-queries.txt | grep yes | awk '{print $1}' > /tmp/rs-ids.txt
+    grep -i select /tmp/rs-queries.txt | grep "yes" | awk '{print $1}' > /tmp/rs-ids.txt
 
     # now, create caches for those queries
     for i in $(cat /tmp/rs-ids.txt); do
@@ -116,33 +117,32 @@ cache_queries() {
 
 ################################
 ## step 0 - ensure we have a release build of the benchmark app
-echo "** running step 0 **"
 cargo --locked build --release
 
 
 # ################################
 # ## step 1 - get a baseline of of simply reading from the upstream database.
 # ## this take a while as we load up the data into the upstream here
-echo "** running step 1 **"
+echo "** running benchmark against upstream database **"
 run_benchmark "${log_dir}/upstream.log" "true" "database"
 sleep $sleep_sec
 
 
 # ################################
 # ## step 2 - get a baseline of readyset as a proxy to the upstream database.
-echo "** running step 2 **"
+echo "** running benchmark against readyset-as-proxy **"
 run_benchmark "${log_dir}/readyset-proxy.log" "false" "readyset"
 sleep $sleep_sec
 
 
 ################################
 ## step 3 - create caches for all the supported queries.
-echo "** running step 3 **"
+echo "** creating readyset caches for supported queries **"
 cache_queries
 
 # ################################
 # ## step 4 - execute with readyset cacheing.
-echo "** running step 3 **"
+echo "** running benchmark against readyset-as-cache **"
 run_benchmark "${log_dir}/readyset-cache.log" "false" "readyset"
 
 
