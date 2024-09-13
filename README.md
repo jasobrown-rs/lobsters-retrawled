@@ -33,10 +33,11 @@ Optional flags:
 A sample cli execution might look like this:
 ```
 cargo --locked run --release -- --dbn mysql://root:noria@127.0.0.1:3307/testdb \
-    --prometheus-push-gateway http://localhost:9091/metrics/job/lobsters-benchmark \
     --runtime 60 \
     --scale 256 \
     --in-flight 512 \
+    --report-interval 4
+    --prometheus-push-gateway http://localhost:9091/metrics/job/lobsters-benchmark \
     --prime
 ```
 
@@ -44,36 +45,32 @@ In this example:
 - I will `prime` the data set.
 - I am setting a very reasonable scale, `256`, along with a decent `in-flight` size of `512`.
 - I am hosting a container running prometheus [pushgateway](https://github.com/prometheus/pushgateway) at port `9091`, and pushing metrics from the benchmark app there.
+- Dump the ongoing stats to the terminal every `4` seconds.
 
 ### Batch script
 
 There's an example shell script of how to orchestrate an end-to-end run which compares testing against the upstream data base versus Readyset.
 
 ## Reporting
-At the end of each run, the benchmark will emit per-page metrics. For example:
+During execution, the benchmark will emit per-page metrics. For example:
 
 *jasobrown to fill this in*
 ```
-# op        	metric      	pct	µs
-Frontpage   	processing  	50	11439
-Frontpage   	processing  	95	18655
-Frontpage   	processing  	99	18655
-Frontpage   	processing  	100	18655
-Frontpage   	sojourn     	50	11599
-Frontpage   	sojourn     	95	18847
-Frontpage   	sojourn     	99	18847
-Frontpage   	sojourn     	100	18847
-User        	processing  	50	6715
-User        	processing  	95	6715
-User        	processing  	99	6715
-User        	processing  	100	6715
-User        	sojourn     	50	6867
-User        	sojourn     	95	6867
-User        	sojourn     	99	6867
-User        	sojourn     	100	6867
+# op        	metric      	count       	p50	p95	p99	p100
+Frontpage   	processing  	4           	3549	3997	3997	3997
+Frontpage   	sojourn     	4           	3633	4075	4075	4075
+User        	processing  	2           	445	763	763	763
+User        	sojourn     	2           	522	776	776	776
+Story       	processing  	5           	27967	29599	29599	29599
+Story       	sojourn     	5           	28031	29663	29663	29663
+CommentVote 	processing  	1           	65599	65599	65599	65599
+CommentVote 	sojourn     	1           	65663	65663	65663	65663
+Comments    	processing  	1           	2923	2923	2923	2923
+Comments    	sojourn     	1           	2931	2931	2931	2931
 ...
 ```
 
+The interval at which the data is printed can be configured by setting the `--report-interval <>` flag.
 
 Alternatively, there is a sample (read: naive) [grafana dashboard](./dashboards/lobsters.json) in this repo you can use a point of departure for graphing the counts and latency histograms.
 

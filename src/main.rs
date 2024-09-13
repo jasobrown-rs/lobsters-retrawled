@@ -9,7 +9,6 @@ use mysql_async::prelude::*;
 use mysql_async::{Conn, Opts, OptsBuilder, Pool, PoolConstraints, PoolOpts, Row};
 
 use std::collections::HashMap;
-use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::{Duration, Instant};
 use trawler::{LobstersRequest, RequestProcessor, TrawlerRequest};
@@ -130,9 +129,7 @@ impl RequestProcessor for MysqlTrawler {
             return Ok(());
         }
         let c = self.pool.as_mut().expect("must have pool").get_conn(); // just checked
-
-        // really?!? how can it be this hard to get a name from the page enum?
-        let page_name = LobstersRequest::variant_name(&mem::discriminant(&req)).to_string();
+        let page_name = req.name().to_string();
 
         macro_rules! handle_req {
             ($module:tt, $req:expr) => {{
@@ -255,6 +252,10 @@ struct Options {
     #[arg(long, default_value = "mysql://lobsters@localhost/soup")]
     dbn: String,
 
+    /// Interval between dumping metrics to the output.
+    #[arg(long, default_value = "2")]
+    report_interval: u32,
+
     /// Enable reporting of metrics to prometheus.
     ///
     /// Note: defaulting to `true` basically makes this always true.
@@ -318,7 +319,8 @@ fn stop_prometheus() {
     std::thread::sleep(sleep_time);
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let options = Options::parse();
     println!("launching lobsters benchmark, options: {:?}", &options);
 
@@ -329,14 +331,16 @@ fn main() -> Result<()> {
     let mut wl = trawler::WorkloadBuilder::default();
     wl.scale(options.scale)
         .time(Duration::from_secs(options.runtime))
-        .in_flight(options.in_flight);
+        .in_flight(options.in_flight)
+        .report_interval(options.report_interval);
 
     if let Some(ref h) = options.histogram {
         wl.with_histogram(h.clone());
     }
 
     let mysql_trawler = MysqlTrawler::new(options.clone())?;
-    wl.run(mysql_trawler, options.prime);
+
+    wl.run(mysql_trawler, options.prime).await?;
 
     if options.prometheus_metrics {
         stop_prometheus();
