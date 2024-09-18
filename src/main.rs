@@ -209,7 +209,10 @@ impl RequestProcessor for MysqlTrawler {
             }
         };
 
-        self.record_histo(page_name, timer.elapsed());
+        // don't bother to record metrics while priming
+        if !priming {
+            self.record_histo(page_name, timer.elapsed());
+        }
         Ok(())
     }
 
