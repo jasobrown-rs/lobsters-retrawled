@@ -2,7 +2,7 @@ extern crate mysql_async as my;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use clap::{Parser, ValueEnum};
+use clap::{ArgAction, Parser, ValueEnum};
 use metrics::{histogram, Histogram};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use mysql_async::prelude::*;
@@ -262,10 +262,16 @@ struct Options {
     /// Enable reporting of metrics to prometheus.
     ///
     /// Note: defaulting to `true` basically makes this always true.
-    #[arg(long, default_value = "true")]
+    #[arg(
+        long,
+        default_value = "true",
+        default_missing_value = "true",
+        num_args = 0..=1,
+        action = ArgAction::Set
+    )]
     prometheus_metrics: bool,
 
-    /// Address of a Prometheus push gate way to send metrics to. 
+    /// Address of a Prometheus push gate way to send metrics to.
     #[arg(long)]
     prometheus_push_gateway: Option<String>,
 }
