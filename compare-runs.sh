@@ -46,23 +46,31 @@ rs_url="mysql://${db_user}:${db_pw}@${rs_address}:${rs_port}/${db_name}"
 log_dir=./$(date +%s)
 mkdir $log_dir
 
+# prime the database, will take a while.
+prime_database() {
+    $driver_bin --dbn ${upstream_url} \
+                --runtime 0 \
+                --scale ${scale} \
+                --in-flight ${in_flight} \
+                --queries ${queries} \
+                --prometheus-metrics false \
+                --prime
+
+    if [ $? -ne 0 ]; then
+        echo "**** The benchmark failed to prime the database. ****"
+        exit 1
+    fi
+}
+
 # run the benchmark
 #
 # params:
 # $1 - log file to write out to
-# $2 - should the benchmark set up the database (generating data ...) {true|false}
-# $3 - execute the benchmark against the database or readyset {database|readyset}
+# $2 - execute the benchmark against the database or readyset {database|readyset}
 run_benchmark() {
     # run driver the foreground
     local log_file=$1
-    local should_prime=$2
-    local target=$3
-
-    # by default, skip priming data into the database
-    local prime=""
-    if [ "$should_prime" == "true" ]; then
-        prime="--prime"
-    fi
+    local target=$2
 
     local url=$upstream_url
     if [ "$target" == "readyset" ]; then
@@ -74,7 +82,7 @@ run_benchmark() {
         prometheus="--prometheus-push-gateway ${push_gateway_url}"
     fi
 
-    $driver_bin $prime --dbn $url \
+    $driver_bin --dbn $url \
                 --runtime ${run_for_sec} \
                 --scale ${scale} \
                 --in-flight ${in_flight} \
@@ -116,33 +124,40 @@ cache_queries() {
 
 
 ################################
-## step 0 - ensure we have a release build of the benchmark app
+## ensure we have a release build of the benchmark app
 cargo --locked build --release
 
 
 # ################################
-# ## step 1 - get a baseline of of simply reading from the upstream database.
+# # prime the database
 # ## this take a while as we load up the data into the upstream here
+# echo "** priming database **"
+# prime_database
+
+
+# ################################
+# ## get a baseline of of simply reading from the upstream database.
 echo "** running benchmark against upstream database **"
-run_benchmark "${log_dir}/upstream.log" "true" "database"
+run_benchmark "${log_dir}/upstream.log" "database"
 sleep $sleep_sec
 
 
 # ################################
-# ## step 2 - get a baseline of readyset as a proxy to the upstream database.
+# ## get a baseline of readyset as a proxy to the upstream database.
 echo "** running benchmark against readyset-as-proxy **"
-run_benchmark "${log_dir}/readyset-proxy.log" "false" "readyset"
+run_benchmark "${log_dir}/readyset-proxy.log" "readyset"
 sleep $sleep_sec
 
 
 ################################
-## step 3 - create caches for all the supported queries.
+## create caches for all the supported queries.
 echo "** creating readyset caches for supported queries **"
 cache_queries
 
+
 # ################################
-# ## step 4 - execute with readyset cacheing.
+# ## execute with readyset cacheing.
 echo "** running benchmark against readyset-as-cache **"
-run_benchmark "${log_dir}/readyset-cache.log" "false" "readyset"
+run_benchmark "${log_dir}/readyset-cache.log" "readyset"
 
 
